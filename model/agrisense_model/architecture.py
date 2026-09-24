@@ -8,6 +8,7 @@ class HybridCNNTransformer(nn.Module):
     def __init__(self, config: Config):
         super().__init__()
         self.image_size = config.image_size
+        self.num_classes = config.num_classes
         blocks = []
         channels = 3
         for out_channels in (32, 64, 128):

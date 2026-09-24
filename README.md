@@ -1,8 +1,8 @@
-# AgriSense — Phase 2B: model pipeline preparation
+# AgriSense — Phase 3A: auditable dataset preparation
 
 A student mini-project using Expo + React Native + TypeScript, FastAPI, and SQLite.
 
-**The running application still uses development-only mock predictions. The Hybrid CNN-Transformer code is now included, but no dataset has been supplied and no model has been trained.** The mock always labels the image “Early Blight” and uses an image hash to produce repeatable synthetic severity (10–70%) and confidence (85–95%). These numbers do not measure plant health or model accuracy. Different images can demonstrate the dashboard; repeated identical images produce identical values.
+**The running application still uses development-only mock predictions. The Hybrid CNN-Transformer code is now included, and the local tomato dataset has been inspected and prepared in dry-run mode; no model has been trained.** The mock always labels the image “Early Blight” and uses an image hash to produce repeatable synthetic severity (10–70%) and confidence (85–95%). These numbers do not measure plant health or model accuracy. Different images can demonstrate the dashboard; repeated identical images produce identical values.
 
 ## Flow
 
@@ -204,9 +204,10 @@ Phase 2B adds runnable **code** for dataset preparation, training, validation, e
 model/
   configs/tomato.json            # All training/data/model paths and hyperparameters
   agrisense_model/
-    config.py                   # Config validation and ten-class mapping
+    config.py                   # Config validation and ordered crop-specific classes
     architecture.py             # HybridCNNTransformer
     data.py                     # Folder scanning, split manifests, preprocessing, Dataset
+    preparation.py              # Read-only train/valid curation and exclusion audit
     engine.py                   # Training/validation loop and classification metrics
     checkpoints.py              # Versioned checkpoint saving and guarded loading
     inference.py                # Image-only checkpoint classifier
@@ -216,6 +217,7 @@ model/
   infer.py                      # Single-image inference with a trained checkpoint
   requirements.txt
   tests/test_pipeline.py
+  tests/test_preparation.py
 ```
 
 Default architecture (all weights start from scratch; no pretrained downloads):
@@ -224,53 +226,108 @@ Default architecture (all weights start from scratch; no pretrained downloads):
 - **CNN/local branch:** three 3 × 3 convolution blocks (32 → 64 → 128 channels), each with GroupNorm, GELU, and 2 × 2 max pooling; adaptive global average pooling yields 128 local-feature values.
 - **Transformer/global branch:** 16 × 16 patch embedding produces 196 tokens of width 128. Learned positional embeddings feed two independent Transformer encoder layers, each with four attention heads, a 512-wide feed-forward layer, GELU, and dropout 0.1. LayerNorm and token mean pooling yield 128 global-feature values.
 - **Fusion:** concatenate the two 128-value vectors into 256 values.
-- **Classification head:** Linear(256, 128) → GELU → Dropout → Linear(128, 10), producing logits. Training uses cross-entropy and AdamW, with gradient clipping.
+- **Classification head:** Linear(256, 128) → GELU → Dropout → Linear(128, number of configured classes), producing logits. Training uses cross-entropy and AdamW, with gradient clipping.
 - **Confidence:** the selected class's softmax probability × 100 at inference. It is **uncalibrated model probability**, not a guarantee of correctness or disease diagnosis.
 - **Severity:** no severity head or proxy calculation. The real-checkpoint adapter returns `severity: null`. Severity needs appropriate labels and a separately designed/evaluated component; class confidence is never converted to severity.
 
-There is still no plant/non-plant recognition. A ten-class tomato classifier can assign an unrelated image to a tomato class. Real model use must remain limited to its evaluated scope; an unrelated-image rejection strategy needs separate data and evaluation.
+There is still no plant/non-plant recognition. A crop-specific disease classifier can assign an unrelated image to a tomato class. Real model use must remain limited to its evaluated scope; an unrelated-image rejection strategy needs separate data and evaluation.
 
-### Where you must place the dataset
+### Phase 3A: source images versus generated metadata
 
-Default absolute directory:
+The verified source root is `/home/munaz/Downloads/archive/`, containing `train/` and
+`valid/`, with no test directory. **Source images stay outside Git and are never renamed,
+rewritten, deleted, or copied by preparation.** The versioned tomato configuration uses
+these 11 exact folder names, in label-index order:
 
-```text
-/home/munaz/Projects/AgriSense/model/data/tomato/
+1. `Bacterial_spot`
+2. `Early_blight`
+3. `Late_blight`
+4. `Leaf_Mold`
+5. `Septoria_leaf_spot`
+6. `Spider_mites Two-spotted_spider_mite`
+7. `Target_Spot`
+8. `Tomato_Yellow_Leaf_Curl_Virus`
+9. `Tomato_mosaic_virus`
+10. `healthy`
+11. `powdery_mildew`
+
+Class validation, model outputs, manifest labels, and confusion matrices derive their
+sizes from the configured ordered class list. `crop_name` identifies the crop; new
+potato/pepper configurations can supply their own verified class lists later. No datasets
+or placeholder classes for those crops are included. Never infer label order from an
+unordered set or silently reuse another crop's mapping.
+
+`--layout train-valid` applies the following versioned policy:
+
+- Verify every supported image and fully decode it; record unreadable files as exclusions.
+  Unsupported extensions are recorded as exclusions too. Unexpected split/class folders
+  and symlinks fail preparation rather than silently disappearing.
+- Hash EXIF-oriented RGB pixels and dimensions. Exclude **all** members of groups with
+  conflicting labels, without guessing a corrected diagnosis.
+- Preserve cleaned `valid` membership as logical `val`. For same-label overlap, exclude
+  training copies and keep the lexicographically first validation path.
+- Retain one lexicographically first representative of each remaining exact-image group;
+  record every redundant path and the retained path.
+- Within each class of cleaned training data, sort paths, shuffle with the configured
+  seed (42), and reserve `max(1, floor(N * test_fraction))` unique images as logical test.
+  The default `test_fraction=0.15` applies to **clean training**, not all source images.
+  Require at least two clean training images and one clean validation image per class.
+  Remaining entries are logical train. No physical `test/` folder is created.
+- Record per-file source split, label, byte hash, pixel hash when readable, image size,
+  exclusion reasons, duplicate/conflict groups, final membership, and count summaries.
+  Exclusion categories are mutually exclusive, with conflict exclusion preceding overlap
+  and within-split deduplication. Every source file must be accounted for exactly once.
+
+The known source inspection found 25,851 training and 6,684 validation files, including
+one corrupt validation image, 396 exact cross-split pairs, and three conflicting-label
+groups. Images below the API's 224-pixel minimum remain usable by the training resize
+path; they are not silently removed. This difference from upload validation is deliberate
+and recorded in the audit.
+
+**Limit:** grouping is exact decoded pixels, not source-leaf identity or perceptual
+similarity. No source/augmentation metadata was supplied. The resulting test split is
+an internal holdout, not proof of source-independent or field performance. Review
+near-duplicates and source provenance before treating later metrics as research results.
+
+Run the read-only preparation calculation, optionally saving a full proposed manifest
+and audit outside the source root (the active manifest is not written):
+
+```bash
+model/.venv/bin/python -m model.prepare_data \
+  --config model/configs/tomato.json \
+  --dataset-root /home/munaz/Downloads/archive \
+  --layout train-valid --dry-run \
+  --audit-output model/reports/tomato_phase3a_audit.json
 ```
 
-Obtain a dataset yourself, check its license/provenance, and extract **only the ten tomato class folders** into this layout. Filenames may vary; class directory names must match exactly, including spaces and underscores:
+Output files are never overwritten. For a repeat audit, omit `--audit-output` or choose
+another filename. `model/reports/` and `model/data/` are Git-ignored generated metadata,
+not the original images. A dry-run audit contains the full proposed manifest but does
+not activate it for training.
 
-```text
-model/data/tomato/
-  Tomato___Bacterial_spot/
-    image_001.jpg
-  Tomato___Early_blight/
-    image_001.jpg
-  Tomato___Late_blight/
-    image_001.jpg
-  Tomato___Leaf_Mold/
-    image_001.jpg
-  Tomato___Septoria_leaf_spot/
-    image_001.jpg
-  Tomato___Spider_mites Two-spotted_spider_mite/
-    image_001.jpg
-  Tomato___Target_Spot/
-    image_001.jpg
-  Tomato___Tomato_Yellow_Leaf_Curl_Virus/
-    image_001.jpg
-  Tomato___Tomato_mosaic_virus/
-    image_001.jpg
-  Tomato___healthy/
-    image_001.jpg
+When ready to materialize the approved manifest, create an ignored local configuration
+so **all later commands resolve the same external source root**:
+
+```bash
+model/.venv/bin/python - <<'PYCONFIG'
+import json
+from pathlib import Path
+config = json.loads(Path('model/configs/tomato.json').read_text())
+config['dataset_path'] = '/home/munaz/Downloads/archive'
+with Path('model/configs/tomato.local.json').open('x') as output:
+    json.dump(config, output, indent=2)
+PYCONFIG
+model/.venv/bin/python -m model.prepare_data \
+  --config model/configs/tomato.local.json --layout train-valid
 ```
 
-The example filenames are placeholders; no images have been created there. JPEG/PNG/WebP files are supported. Missing/empty class folders, unexpected crop folders, unreadable images, or conflicting labels for identical images stop preparation. Every class needs at least three unique images to mechanically form three splits; this minimum is **not** enough to claim useful training or evaluation.
-
-For an already curated split, use `model/data/tomato/train/<class>/`, `model/data/tomato/val/<class>/`, and `model/data/tomato/test/<class>/`, with all ten classes in each, then pass `--layout presplit` to preparation. This preserves supplied membership and rejects exact decoded-image duplicates crossing splits.
-
-For unsplit data, preparation uses seed 42 to allocate unique image groups per class to roughly 70% train / 15% validation / 15% test. Rounding and grouped duplicates can change image-count proportions. The resulting `model/data/tomato_splits.json` records paths, labels, hashes, and membership; training never silently re-splits. Existing manifests are not overwritten. Exact decoded-pixel duplicates remain in one split; near-duplicates, augmented variants, and different photos of the same source leaf are **not** automatically detected. Curate/group those by source before splitting, preferably using the presplit layout. Do not mix pre-augmented copies across splits.
-
-Image hashes and class mappings are rechecked against the manifest before training/evaluation. Training augmentation uses horizontal flips, ±15° rotation, and modest brightness/contrast changes. Validation, test, and inference use deterministic RGB conversion, resizing, and the same normalization. Test samples are not used for training or checkpoint selection.
+The generated active manifest is `model/data/tomato_splits.json` unless overridden.
+Manifest loading validates crop/class order, inventory membership and source byte hashes,
+selected pixel hashes, validation membership, class coverage, and absence of duplicates.
+Changes to source data require a fresh reviewed preparation, not silent re-splitting.
+Legacy `unsplit` and complete `train/val/test` (`presplit`) layouts remain available and
+strict; the conservative exclusion policy above is explicitly selected by `train-valid`.
+`validation_fraction` only applies to the unsplit layout.
 
 ### Environment and future commands
 
@@ -285,21 +342,15 @@ model/.venv/bin/python -m pip install torch==2.14.0 --index-url https://download
 model/.venv/bin/python -m pip install -r model/requirements.txt
 ```
 
-**After supplying and reviewing the real dataset**, prepare its split manifest (this does not train):
+Use the Phase 3A preparation procedure above; do not run training without separate approval.
+
+Future training command — **not run during Phase 2B or Phase 3A**:
 
 ```bash
-model/.venv/bin/python -m model.prepare_data --config model/configs/tomato.json
-# For an existing train/val/test layout, use instead:
-model/.venv/bin/python -m model.prepare_data --config model/configs/tomato.json --layout presplit
+model/.venv/bin/python -m model.train --config model/configs/tomato.local.json --device cpu
 ```
 
-Future training command — **not run during Phase 2B implementation**:
-
-```bash
-model/.venv/bin/python -m model.train --config model/configs/tomato.json --device cpu
-```
-
-Default settings in `model/configs/tomato.json`: image size 224, batch size 16, learning rate 0.0003, epochs 30, seed 42, and the exact ordered ten-class list. Dataset, manifest, checkpoint, and report paths are configurable. Relative data/output paths resolve from the repository root, not the shell's current directory. An optional `--device cuda` requires separately installing a matching CUDA-enabled PyTorch build and suitable hardware; CPU is the tested setup. Deterministic operations are requested; identical results across devices/PyTorch versions are not guaranteed.
+Default settings in `model/configs/tomato.json`: image size 224, batch size 16, learning rate 0.0003, epochs 30, seed 42, and the exact ordered eleven-class tomato list. Dataset, manifest, checkpoint, and report paths are configurable. Relative data/output paths resolve from the repository root, not the shell's current directory. An optional `--device cuda` requires separately installing a matching CUDA-enabled PyTorch build and suitable hardware; CPU is the tested setup. Deterministic operations are requested; identical results across devices/PyTorch versions are not guaranteed.
 
 Training validates after each epoch and saves the model with the lowest validation loss at:
 
@@ -307,12 +358,12 @@ Training validates after each epoch and saves the model with the lowest validati
 /home/munaz/Projects/AgriSense/model/checkpoints/tomato_hybrid_best.pt
 ```
 
-The checkpoint contains state dictionaries, ordered classes/configuration, preprocessing version, completed epoch and optimizer-step counts, actual validation loss, and the split-manifest digest. Epoch records go to `model/checkpoints/tomato_hybrid_best.history.json`. Existing checkpoints are not overwritten by a new training invocation; configure a new path for a new experiment. There is no resume-training CLI yet.
+Checkpoint format v2 binds the crop and ordered class mapping with a digest. Inference/evaluation compare this against the requested configuration before constructing the model; old format-v1 checkpoints are rejected. The checkpoint contains state dictionaries, ordered classes/configuration, preprocessing version, completed epoch and optimizer-step counts, actual validation loss, and the split-manifest digest. Epoch records go to `model/checkpoints/tomato_hybrid_best.history.json`. Existing checkpoints are not overwritten by a new training invocation; configure a new path for a new experiment. There is no resume-training CLI yet.
 
 Future evaluation command — **not run against any real dataset/checkpoint yet**:
 
 ```bash
-model/.venv/bin/python -m model.evaluate --config model/configs/tomato.json
+model/.venv/bin/python -m model.evaluate --config model/configs/tomato.local.json
 ```
 
 Evaluation requires the same manifest and class mapping as training, and uses checkpoint preprocessing settings. It writes measured test loss, accuracy, confusion matrix (rows = actual, columns = predicted), per-class precision/recall/F1/support, and macro F1 to `model/reports/tomato_test.json`. Accuracy/precision/recall/F1 are fractions (0–1). Zero-denominator precision/recall/F1 use 0. Do not repeatedly tune against the held-out test set. No such performance report exists yet.
@@ -320,7 +371,7 @@ Evaluation requires the same manifest and class mapping as training, and uses ch
 Future single-image inference command:
 
 ```bash
-model/.venv/bin/python -m model.infer --config model/configs/tomato.json --image /absolute/path/leaf.jpg
+model/.venv/bin/python -m model.infer --config model/configs/tomato.local.json --image /absolute/path/leaf.jpg
 ```
 
 The CLI first applies the existing technical image checks. Checkpoint loading uses `weights_only=True`, strict architecture/state checks, finite weights, training metadata, and preprocessing compatibility. Missing, raw/untrained, or incompatible checkpoints fail with an error; inference never substitutes random weights. Metadata guards prevent accidental use of untrained weights, but do not establish model quality or prove provenance of an arbitrary supplied file. Use only trusted checkpoints produced and evaluated in your own workflow.
@@ -333,9 +384,9 @@ The default `create_app()` **still constructs `MockPredictor`**, even if a check
 
 The response's existing `severity` field now permits `null`, SQLite migrates the old table transactionally while preserving existing observations, and the frontend displays “Severity not estimated” without plotting an invented zero. These small compatibility changes avoid fabricating severity when a classifier is eventually connected. No other app flow has been redesigned.
 
-Datasets, split manifests, virtual environments, checkpoints, training histories, and evaluation reports are Git-ignored. No datasets or weights were downloaded; no training or deployment was performed. Next, supply the licensed raw tomato images and their source/collection grouping information, review the class labels and splits, then explicitly authorize a separate training/evaluation run. Phase 3 has not started.
+Datasets, split manifests, virtual environments, checkpoints, training histories, and evaluation reports are Git-ignored. The user supplied the local tomato images; no datasets or weights were downloaded by this workflow. Phase 3A prepares metadata only. No training or deployment was performed. Review the generated audit and source/collection grouping limitations before authorizing a separate training sanity test.
 
-### Phase 2B checks
+### Model/backend checks
 
 ```bash
 cd /home/munaz/Projects/AgriSense
@@ -355,6 +406,16 @@ Model tests check configuration, branch connectivity/shapes, deterministic prepr
 Implementation references: [PyTorch TransformerEncoderLayer](https://docs.pytorch.org/docs/stable/generated/torch.nn.TransformerEncoderLayer.html) and [saving/loading state dictionaries](https://docs.pytorch.org/tutorials/beginner/saving_loading_models).
 
 ### Verification notes
+
+Phase 3A verification: 44 model tests and 32 backend tests passed, as did both Python
+dependency checks. The real dataset dry run retained 31,441 of 32,535 source files:
+21,108 train, 6,614 validation, and 3,719 test. It excluded 1 unreadable file, 6 files
+from 3 conflicting-label groups, 395 training copies overlapping validation, and 692
+within-split redundant copies. No exact pixel duplicates remain in proposed membership.
+The full audit is generated locally at `model/reports/tomato_phase3a_audit.json` and is
+Git-ignored. No active training manifest, trained checkpoint, or performance metric was
+created by this dry run. Near-duplicate/source-leaf leakage remains unverified.
+
 
 Phase 2B verification: 22 model tests and 32 backend tests passed; model/backend dependency checks, TypeScript, Expo compatibility, web/Android/iOS bundles, and all four model CLI `--help` commands passed. No optimizer updates, real dataset evaluation, trained checkpoints, or performance reports were produced.
 

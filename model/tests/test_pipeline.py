@@ -62,7 +62,7 @@ def test_hybrid_shape_and_both_branch_gradients(config):
     images = torch.randn(2, 3, 32, 32)
     before = {key: value.clone() for key, value in model.state_dict().items()}
     output = model(images)
-    assert output.shape == (2, 10)
+    assert output.shape == (2, config.num_classes)
     assert torch.isfinite(output).all()
     # Autograd connectivity only: no optimizer and no parameter updates.
     grads = torch.autograd.grad(output.square().sum(),
@@ -76,7 +76,7 @@ def test_hybrid_shape_and_both_branch_gradients(config):
 def test_default_architecture_forward_shape():
     model = HybridCNNTransformer(load_config()).eval()
     with torch.inference_mode():
-        assert model(torch.zeros(1, 3, 224, 224)).shape == (1, 10)
+        assert model(torch.zeros(1, 3, 224, 224)).shape == (1, len(TOMATO_CLASSES))
 
 
 def test_reproducible_splits_and_duplicate_grouping(config):
@@ -92,13 +92,13 @@ def test_reproducible_splits_and_duplicate_grouping(config):
     assert not hashes['train'] & hashes['val']
     assert not hashes['train'] & hashes['test']
     assert not hashes['val'] & hashes['test']
-    assert sum(len(rows) for rows in manifest['splits'].values()) == 61
+    assert sum(len(rows) for rows in manifest['splits'].values()) == 6 * config.num_classes + 1
     for split in ('train', 'val', 'test'):
-        assert {row['label'] for row in manifest['splits'][split]} == set(range(10))
+        assert {row['label'] for row in manifest['splits'][split]} == set(range(config.num_classes))
         with patch('model.agrisense_model.data.preprocess', wraps=preprocess) as transform:
             tensor, label = TomatoDataset(config, manifest, split)[0]
             assert tensor.shape == (3, 32, 32)
-            assert 0 <= label < 10
+            assert 0 <= label < config.num_classes
             assert transform.call_args.kwargs['augment'] is (split == 'train')
 
 
@@ -152,7 +152,7 @@ def test_checkpoint_missing_and_untrained_refused(config):
         TomatoClassifier(config.path('checkpoint_path'))
     path = config.path('checkpoint_path')
     # This rejected fixture is never claimed to be trained or used for inference.
-    torch.save({'format_version': 1, 'trained': False}, path)
+    torch.save({'format_version': 2, 'trained': False}, path)
     with pytest.raises(ValueError, match='Refusing inference'):
         load_checkpoint(path)
     torch.save(HybridCNNTransformer(config).state_dict(), path)
@@ -165,7 +165,7 @@ def test_checkpoint_missing_and_untrained_refused(config):
 def test_inference_probability_math_and_absent_severity(config):
     class FixedLogits(torch.nn.Module):
         def forward(self, image):
-            return torch.arange(10, dtype=torch.float32).unsqueeze(0)
+            return torch.arange(config.num_classes, dtype=torch.float32).unsqueeze(0)
     # Stub the guarded loader for this arithmetic test only; no checkpoint artifact.
     with patch('model.agrisense_model.inference.load_checkpoint', return_value=(FixedLogits(), config, {})):
         classifier = TomatoClassifier(Path('test-only-unused'))
@@ -173,7 +173,7 @@ def test_inference_probability_math_and_absent_severity(config):
         Image.new('RGB', (256, 256), 'white').save(image, format='PNG')
         result = classifier.predict(image.getvalue())
     assert result['disease'] == TOMATO_CLASSES[-1]
-    assert result['confidence'] == pytest.approx(float(torch.softmax(torch.arange(10, dtype=torch.float32), 0)[-1]) * 100)
+    assert result['confidence'] == pytest.approx(float(torch.softmax(torch.arange(config.num_classes, dtype=torch.float32), 0)[-1]) * 100)
     assert result['severity'] is None
 
 
@@ -190,7 +190,7 @@ def test_validation_loop_has_no_optimizer_updates(config):
 
 
 def test_report_math_only():
-    matrix = [[0] * 10 for _ in range(10)]
+    matrix = [[0] * len(TOMATO_CLASSES) for _ in TOMATO_CLASSES]
     matrix[0][0], matrix[0][1], matrix[1][1] = 2, 1, 1
     report = classification_report(matrix, TOMATO_CLASSES)
     assert report['per_class'][TOMATO_CLASSES[0]]['recall'] == pytest.approx(2 / 3)

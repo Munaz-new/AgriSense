@@ -6,10 +6,10 @@ from .checkpoints import ARCHITECTURE, load_checkpoint
 from .data import preprocess
 
 
-class TomatoClassifier:
+class CropClassifier:
     """Image-only classifier. No random/untrained fallback and no severity estimate."""
-    def __init__(self, checkpoint: Path):
-        self.model, self.config, self.metadata = load_checkpoint(checkpoint)
+    def __init__(self, checkpoint: Path, expected_config=None):
+        self.model, self.config, self.metadata = load_checkpoint(checkpoint, expected_config=expected_config)
 
     def predict(self, image: bytes) -> dict:
         with Image.open(BytesIO(image)) as decoded:
@@ -22,3 +22,6 @@ class TomatoClassifier:
         return {'disease': self.config.class_names[index], 'severity': None,
                 'confidence': float(probabilities[index]) * 100,
                 'predictor': ARCHITECTURE, 'is_mock': False}
+
+
+TomatoClassifier = CropClassifier  # Compatibility alias for the existing backend adapter.

@@ -3,7 +3,7 @@ import argparse
 import json
 from pathlib import Path
 from .agrisense_model.config import DEFAULT_CONFIG, load_config
-from .agrisense_model.inference import TomatoClassifier
+from .agrisense_model.inference import CropClassifier
 
 
 def main():
@@ -18,9 +18,9 @@ def main():
     validation = TechnicalPlantImageValidator().validate(data)
     if not validation.is_valid:
         raise SystemExit(validation.message)
-    classifier = TomatoClassifier(config.path('checkpoint_path'))
+    classifier = CropClassifier(config.path('checkpoint_path'), expected_config=config)
     print(json.dumps(classifier.predict(data), indent=2))
-    print('Tomato classes only. Softmax confidence is uncalibrated. Severity is not estimated.')
+    print(f'{config.crop_name} configuration only. Softmax confidence is uncalibrated. Severity is not estimated.')
 
 
 if __name__ == '__main__':

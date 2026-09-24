@@ -45,7 +45,8 @@ class TrainedTomatoPredictor:
         if repository not in sys.path:
             sys.path.insert(0, repository)
         from model.agrisense_model.inference import TomatoClassifier
-        self.classifier = TomatoClassifier(checkpoint)
+        from model.agrisense_model.config import load_config
+        self.classifier = TomatoClassifier(checkpoint, expected_config=load_config())
 
     def predict(self, image: bytes) -> Prediction:
         return Prediction(**self.classifier.predict(image))

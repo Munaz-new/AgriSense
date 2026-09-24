@@ -69,3 +69,6 @@ client_secret*.json
 .cache/
 .mypy_cache/
 .ruff_cache/
+
+# Workstation-specific dataset paths and preparation configuration
+model/configs/*.local.json

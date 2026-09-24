@@ -39,6 +39,11 @@ def scan_classes(root: Path, classes):
 
 
 def prepare_manifest(config: Config, layout='unsplit'):
+    if layout == 'train-valid':
+        from .preparation import prepare_train_valid
+        return prepare_train_valid(config)
+    if layout not in {'unsplit', 'presplit'}:
+        raise ValueError('Unknown dataset layout.')
     root = config.path('dataset_path').resolve()
     rng = random.Random(config.seed)
     splits = {name: [] for name in ('train', 'val', 'test')}
@@ -77,7 +82,7 @@ def prepare_manifest(config: Config, layout='unsplit'):
             if previous != (split, entry['label']):
                 raise ValueError('Identical decoded images cross splits or have conflicting labels.')
             entry['path'] = entry['path'].resolve().relative_to(root).as_posix()
-    return {'version': 1, 'seed': config.seed, 'class_names': list(config.class_names), 'splits': splits}
+    return {'version': 1, 'crop_name': config.crop_name, 'seed': config.seed, 'class_names': list(config.class_names), 'splits': splits}
 
 
 def load_manifest(config: Config):
@@ -85,15 +90,22 @@ def load_manifest(config: Config):
     if not path.is_file():
         raise ValueError(f'Split manifest missing: {path}. Run model.prepare_data first.')
     manifest = json.loads(path.read_text())
-    if manifest.get('version') != 1 or manifest['class_names'] != list(config.class_names):
+    if manifest.get('version') not in {1, 2} or manifest['class_names'] != list(config.class_names):
         raise ValueError('Manifest version or class mapping mismatch.')
+    if manifest.get('crop_name') != config.crop_name:
+        raise ValueError('Manifest crop mapping mismatch.')
+    if manifest.get('version') == 2:
+        from .preparation import validate_audit
+        validate_audit(config, manifest)
     seen_paths, seen_hashes = set(), {}
     root = config.path('dataset_path').resolve()
     for split in ('train', 'val', 'test'):
         entries = manifest['splits'][split]
-        if {e['label'] for e in entries} != set(range(10)):
+        if {e['label'] for e in entries} != set(range(config.num_classes)):
             raise ValueError(f'{split} must contain every class.')
         for entry in entries:
+            if type(entry['label']) is not int or not 0 <= entry['label'] < config.num_classes:
+                raise ValueError('Invalid class label in manifest.')
             path = (root / entry['path']).resolve()
             if not path.is_relative_to(root) or path in seen_paths:
                 raise ValueError('Manifest contains duplicate or out-of-root paths.')
@@ -125,7 +137,7 @@ def preprocess(image: Image.Image, image_size: int, augment=False):
     return (tensor - mean) / std
 
 
-class TomatoDataset(Dataset):
+class CropDataset(Dataset):
     def __init__(self, config: Config, manifest, split: str):
         self.config, self.entries, self.split = config, manifest['splits'][split], split
 
@@ -137,3 +149,7 @@ class TomatoDataset(Dataset):
         with Image.open(self.config.path('dataset_path') / entry['path']) as image:
             tensor = preprocess(image, self.config.image_size, augment=self.split == 'train')
         return tensor, entry['label']
+
+
+# Backward-compatible import; implementation is crop-agnostic.
+TomatoDataset = CropDataset

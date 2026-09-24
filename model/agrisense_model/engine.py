@@ -3,7 +3,7 @@ import numpy as np
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
-from .data import TomatoDataset
+from .data import CropDataset
 
 
 def seed_everything(seed):
@@ -15,7 +15,7 @@ def seed_everything(seed):
 
 def loader(config, manifest, split):
     generator = torch.Generator().manual_seed(config.seed)
-    return DataLoader(TomatoDataset(config, manifest, split), batch_size=config.batch_size,
+    return DataLoader(CropDataset(config, manifest, split), batch_size=config.batch_size,
                       shuffle=split == 'train', num_workers=0, generator=generator)
 
 
@@ -23,13 +23,15 @@ def run_epoch(model, batches, device, optimizer=None):
     training = optimizer is not None
     model.train(training)
     total_loss, correct, count, steps = 0.0, 0, 0, 0
-    matrix = torch.zeros(10, 10, dtype=torch.long)
+    matrix = torch.zeros(model.num_classes, model.num_classes, dtype=torch.long)
     with torch.set_grad_enabled(training):
         for images, labels in batches:
             images, labels = images.to(device), labels.to(device)
             if training:
                 optimizer.zero_grad(set_to_none=True)
             logits = model(images)
+            if logits.shape != (labels.numel(), model.num_classes):
+                raise ValueError('Model output does not match configured class count.')
             loss = nn.functional.cross_entropy(logits, labels)
             if not torch.isfinite(loss):
                 raise ValueError('Nonfinite loss; stopping without saving this epoch.')
@@ -52,6 +54,8 @@ def run_epoch(model, batches, device, optimizer=None):
 
 def classification_report(matrix, class_names):
     matrix = torch.tensor(matrix)
+    if matrix.shape != (len(class_names), len(class_names)):
+        raise ValueError('Confusion matrix does not match class mapping.')
     report = {}
     for i, name in enumerate(class_names):
         tp = matrix[i, i].item()

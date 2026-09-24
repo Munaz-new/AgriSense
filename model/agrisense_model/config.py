@@ -7,15 +7,16 @@ ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY = ROOT.parent
 DEFAULT_CONFIG = ROOT / 'configs/tomato.json'
 TOMATO_CLASSES = (
-    'Tomato___Bacterial_spot', 'Tomato___Early_blight', 'Tomato___Late_blight',
-    'Tomato___Leaf_Mold', 'Tomato___Septoria_leaf_spot',
-    'Tomato___Spider_mites Two-spotted_spider_mite', 'Tomato___Target_Spot',
-    'Tomato___Tomato_Yellow_Leaf_Curl_Virus', 'Tomato___Tomato_mosaic_virus', 'Tomato___healthy',
+    'Bacterial_spot', 'Early_blight', 'Late_blight',
+    'Leaf_Mold', 'Septoria_leaf_spot',
+    'Spider_mites Two-spotted_spider_mite', 'Target_Spot',
+    'Tomato_Yellow_Leaf_Curl_Virus', 'Tomato_mosaic_virus', 'healthy', 'powdery_mildew',
 )
 
 
 @dataclass
 class Config:
+    crop_name: str = 'tomato'
     dataset_path: str = 'model/data/tomato'
     manifest_path: str = 'model/data/tomato_splits.json'
     checkpoint_path: str = 'model/checkpoints/tomato_hybrid_best.pt'
@@ -35,9 +36,18 @@ class Config:
     class_names: tuple[str, ...] = TOMATO_CLASSES
 
     def __post_init__(self):
+        if not isinstance(self.class_names, (list, tuple)):
+            raise ValueError('class_names must be an ordered list or tuple.')
         self.class_names = tuple(self.class_names)
-        if len(self.class_names) != 10 or set(self.class_names) != set(TOMATO_CLASSES):
-            raise ValueError('Configuration must contain exactly the ten supported tomato classes.')
+        if (len(self.class_names) < 2 or any(
+                not isinstance(name, str) or not name.strip() or name != name.strip()
+                or name in {'.', '..'} or '/' in name or '\\' in name or '\x00' in name
+                for name in self.class_names)):
+            raise ValueError('At least two nonempty, safe class directory names are required.')
+        if len(set(self.class_names)) != len(self.class_names):
+            raise ValueError('Class names must be unique and explicitly ordered.')
+        if not isinstance(self.crop_name, str) or not self.crop_name.strip():
+            raise ValueError('crop_name must be nonempty.')
         for key in ('image_size', 'batch_size', 'epochs', 'patch_size', 'embedding_dim', 'transformer_heads', 'transformer_layers'):
             if type(getattr(self, key)) is not int or getattr(self, key) <= 0:
                 raise ValueError(f'{key} must be a positive integer.')
@@ -52,6 +62,10 @@ class Config:
         if not (0 < self.validation_fraction < 1 and 0 < self.test_fraction < 1
                 and self.validation_fraction + self.test_fraction < 1):
             raise ValueError('Validation/test fractions must leave a nonempty training split.')
+
+    @property
+    def num_classes(self):
+        return len(self.class_names)
 
     def path(self, name: str) -> Path:
         value = Path(getattr(self, name)).expanduser()

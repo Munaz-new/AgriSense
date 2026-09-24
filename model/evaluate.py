@@ -13,7 +13,7 @@ def main():
     parser.add_argument('--config', default=str(DEFAULT_CONFIG))
     args = parser.parse_args()
     config = load_config(args.config)
-    model, trained_config, metadata = load_checkpoint(config.path('checkpoint_path'))
+    model, trained_config, metadata = load_checkpoint(config.path('checkpoint_path'), expected_config=config)
     if config.class_names != trained_config.class_names:
         raise ValueError('Evaluation class order does not match checkpoint.')
     manifest = load_manifest(config)
