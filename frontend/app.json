@@ -1,0 +1,14 @@
+{
+  "expo": {
+    "name": "AgriSense",
+    "slug": "agrisense",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "plugins": [["expo-image-picker", {
+      "photosPermission": "Select a leaf image for an AgriSense observation.",
+      "cameraPermission": "Capture a leaf image for an AgriSense observation.",
+      "microphonePermission": false
+    }]]
+  }
+}

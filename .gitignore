@@ -15,3 +15,57 @@ build/
 .vscode/
 .idea/
 .DS_Store
+
+# Local configuration (examples remain versioned)
+.env.*
+!.env.example
+# Runtime data and model artifacts
+*.db
+*.db-*
+*.sqlite*
+backend/uploads/
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.h5
+*.keras
+*.safetensors
+# Checks and generated output
+.pytest_cache/
+.coverage
+htmlcov/
+coverage/
+*.tsbuildinfo
+*.log
+
+# Phase 2B: datasets, splits, checkpoints, and measured run outputs
+model/data/
+model/checkpoints/
+model/reports/
+model/runs/
+
+# Downloaded datasets and archives (keep local originals)
+data/
+datasets/
+kaggle/
+kaggle.json
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.tar.bz2
+*.tar.xz
+*.7z
+*.rar
+
+# Credentials and additional local caches
+secrets/
+credentials/
+credentials.json
+client_secret*.json
+*.pem
+*.key
+.cache/
+.mypy_cache/
+.ruff_cache/

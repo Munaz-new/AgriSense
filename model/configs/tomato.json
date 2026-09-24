@@ -1,0 +1,30 @@
+{
+  "dataset_path": "model/data/tomato",
+  "manifest_path": "model/data/tomato_splits.json",
+  "checkpoint_path": "model/checkpoints/tomato_hybrid_best.pt",
+  "report_path": "model/reports/tomato_test.json",
+  "image_size": 224,
+  "batch_size": 16,
+  "learning_rate": 0.0003,
+  "epochs": 30,
+  "seed": 42,
+  "validation_fraction": 0.15,
+  "test_fraction": 0.15,
+  "patch_size": 16,
+  "embedding_dim": 128,
+  "transformer_heads": 4,
+  "transformer_layers": 2,
+  "dropout": 0.1,
+  "class_names": [
+    "Tomato___Bacterial_spot",
+    "Tomato___Early_blight",
+    "Tomato___Late_blight",
+    "Tomato___Leaf_Mold",
+    "Tomato___Septoria_leaf_spot",
+    "Tomato___Spider_mites Two-spotted_spider_mite",
+    "Tomato___Target_Spot",
+    "Tomato___Tomato_Yellow_Leaf_Curl_Virus",
+    "Tomato___Tomato_mosaic_virus",
+    "Tomato___healthy"
+  ]
+}
