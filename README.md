@@ -1,8 +1,8 @@
-# AgriSense — Phase 3A: auditable dataset preparation
+# AgriSense — Phase 3B: training readiness verified
 
 A student mini-project using Expo + React Native + TypeScript, FastAPI, and SQLite.
 
-**The running application still uses development-only mock predictions. The Hybrid CNN-Transformer code is now included, and the local tomato dataset has been inspected and prepared in dry-run mode; no model has been trained.** The mock always labels the image “Early Blight” and uses an image hash to produce repeatable synthetic severity (10–70%) and confidence (85–95%). These numbers do not measure plant health or model accuracy. Different images can demonstrate the dashboard; repeated identical images produce identical values.
+**The running application still uses development-only mock predictions. Phase 3B materialized the validated Phase 3A manifest and passed one disposable CPU sanity batch: 11 images across all 11 tomato classes, one optimizer step. No full training or trained checkpoint was produced.** See the [Phase 3B readiness report](model/PHASE3B_READINESS.md) for measurements and Windows readiness limitations. Further training requires user approval. The mock always labels the image “Early Blight” and uses an image hash to produce repeatable synthetic severity (10–70%) and confidence (85–95%). These numbers do not measure plant health or model accuracy. Different images can demonstrate the dashboard; repeated identical images produce identical values.
 
 ## Flow
 
@@ -32,12 +32,13 @@ Every prediction request and save request revalidates its own image bytes. Calli
 - Node.js 22.13 or newer and npm (tested with Node 22.23).
 - For the easiest local demo, a desktop browser. For native testing, use an Expo Go version compatible with Expo SDK 57, an Android emulator, or an iOS simulator on macOS.
 
-Run commands from the repository root unless noted.
+Run commands from the repository root unless noted. Replace `/path/to/AgriSense`
+and `/path/to/tomato-dataset` with your checkout and external dataset locations.
 
 ## 1. Backend setup and run
 
 ```bash
-cd /home/munaz/Projects/AgriSense
+cd /path/to/AgriSense
 python -m venv backend/.venv
 backend/.venv/bin/python -m pip install -r backend/requirements.txt
 cd backend
@@ -58,7 +59,7 @@ Optional shell environment variables: `AGRISENSE_DB_PATH`, `AGRISENSE_UPLOAD_DIR
 In a second terminal:
 
 ```bash
-cd /home/munaz/Projects/AgriSense/frontend
+cd /path/to/AgriSense/frontend
 npm ci
 cp .env.example .env
 npm run web
@@ -73,7 +74,7 @@ EXPO_PUBLIC_API_URL=http://localhost:8000
 To run on a phone, edit `frontend/.env`: replace `localhost` with your computer’s LAN IPv4 address (for example `http://192.168.1.10:8000`). Connect the computer and phone to the same network and allow local connections to ports 8000 and 8081 through your firewall. Then run:
 
 ```bash
-cd /home/munaz/Projects/AgriSense/frontend
+cd /path/to/AgriSense/frontend
 npm start
 ```
 
@@ -178,11 +179,11 @@ To add the trained Hybrid CNN-Transformer later, implement `predict(image: bytes
 ## Checks
 
 ```bash
-cd /home/munaz/Projects/AgriSense/backend
+cd /path/to/AgriSense/backend
 .venv/bin/python -m pytest -q
 .venv/bin/python -m pip check
 
-cd /home/munaz/Projects/AgriSense/frontend
+cd /path/to/AgriSense/frontend
 npm run typecheck
 npx expo install --check
 npx expo export --platform all
@@ -212,6 +213,7 @@ model/
     checkpoints.py              # Versioned checkpoint saving and guarded loading
     inference.py                # Image-only checkpoint classifier
   prepare_data.py               # Build/audit split manifest; no image copying
+  sanity.py                     # Bounded CPU check: 11 samples, one optimizer step
   train.py                      # Explicit training entry point
   evaluate.py                   # Held-out test evaluation
   infer.py                      # Single-image inference with a trained checkpoint
@@ -234,7 +236,7 @@ There is still no plant/non-plant recognition. A crop-specific disease classifie
 
 ### Phase 3A: source images versus generated metadata
 
-The verified source root is `/home/munaz/Downloads/archive/`, containing `train/` and
+The verified source root is an external dataset directory, containing `train/` and
 `valid/`, with no test directory. **Source images stay outside Git and are never renamed,
 rewritten, deleted, or copied by preparation.** The versioned tomato configuration uses
 these 11 exact folder names, in label-index order:
@@ -295,7 +297,7 @@ and audit outside the source root (the active manifest is not written):
 ```bash
 model/.venv/bin/python -m model.prepare_data \
   --config model/configs/tomato.json \
-  --dataset-root /home/munaz/Downloads/archive \
+  --dataset-root /path/to/tomato-dataset \
   --layout train-valid --dry-run \
   --audit-output model/reports/tomato_phase3a_audit.json
 ```
@@ -313,7 +315,7 @@ model/.venv/bin/python - <<'PYCONFIG'
 import json
 from pathlib import Path
 config = json.loads(Path('model/configs/tomato.json').read_text())
-config['dataset_path'] = '/home/munaz/Downloads/archive'
+config['dataset_path'] = '/path/to/tomato-dataset'
 with Path('model/configs/tomato.local.json').open('x') as output:
     json.dump(config, output, indent=2)
 PYCONFIG
@@ -336,13 +338,39 @@ The lightweight backend environment remains separate from the PyTorch environmen
 Install model dependencies on a fresh checkout (already installed on this workstation):
 
 ```bash
-cd /home/munaz/Projects/AgriSense
+cd /path/to/AgriSense
 python -m venv model/.venv
 model/.venv/bin/python -m pip install torch==2.14.0 --index-url https://download.pytorch.org/whl/cpu
 model/.venv/bin/python -m pip install -r model/requirements.txt
 ```
 
 Use the Phase 3A preparation procedure above; do not run training without separate approval.
+
+### Phase 3B: bounded sanity check
+
+The [readiness report](model/PHASE3B_READINESS.md) records the completed local run.
+`model/sanity.py` is the reusable CPU runner derived from that run's preserved local
+script. It requires the validated active manifest and original Phase 3A audit,
+checks their equality and source integrity, then uses exactly one training image
+per class in one batch with one optimizer step. It saves only a local JSON report;
+it never saves weights or starts a full epoch. It has no GPU or full-training mode.
+Memory measurements are omitted when the platform lacks `resource`, including
+Windows; Windows execution itself has not yet been verified.
+
+For a separately approved repeat, from the repository root with the model Python
+environment activated (replace local paths as needed):
+
+```bash
+python -m model.sanity --config model/configs/tomato.local.json \
+  --audit model/reports/tomato_phase3a_audit.json \
+  --report model/reports/tomato_sanity.json
+```
+
+The runner rejects an existing output or output inside the source dataset. Keep
+local configurations, audit/manifest files, and JSON runtime reports ignored. The
+versioned `model/configs/tomato.json` provides reusable settings with relative paths.
+The new safety/portability tests use temporary fixtures and perform no optimizer
+updates. The completed real-data check has not been rerun for checkpoint packaging.
 
 Future training command — **not run during Phase 2B or Phase 3A**:
 
@@ -355,7 +383,7 @@ Default settings in `model/configs/tomato.json`: image size 224, batch size 16, 
 Training validates after each epoch and saves the model with the lowest validation loss at:
 
 ```text
-/home/munaz/Projects/AgriSense/model/checkpoints/tomato_hybrid_best.pt
+model/checkpoints/tomato_hybrid_best.pt
 ```
 
 Checkpoint format v2 binds the crop and ordered class mapping with a digest. Inference/evaluation compare this against the requested configuration before constructing the model; old format-v1 checkpoints are rejected. The checkpoint contains state dictionaries, ordered classes/configuration, preprocessing version, completed epoch and optimizer-step counts, actual validation loss, and the split-manifest digest. Epoch records go to `model/checkpoints/tomato_hybrid_best.history.json`. Existing checkpoints are not overwritten by a new training invocation; configure a new path for a new experiment. There is no resume-training CLI yet.
@@ -384,12 +412,12 @@ The default `create_app()` **still constructs `MockPredictor`**, even if a check
 
 The response's existing `severity` field now permits `null`, SQLite migrates the old table transactionally while preserving existing observations, and the frontend displays “Severity not estimated” without plotting an invented zero. These small compatibility changes avoid fabricating severity when a classifier is eventually connected. No other app flow has been redesigned.
 
-Datasets, split manifests, virtual environments, checkpoints, training histories, and evaluation reports are Git-ignored. The user supplied the local tomato images; no datasets or weights were downloaded by this workflow. Phase 3A prepares metadata only. No training or deployment was performed. Review the generated audit and source/collection grouping limitations before authorizing a separate training sanity test.
+Datasets, split manifests, virtual environments, checkpoints, training histories, and evaluation reports are Git-ignored. The user supplied the local tomato images; no datasets or weights were downloaded by this workflow. Phase 3A prepared metadata only. Phase 3B subsequently completed one disposable optimizer step, as recorded in the readiness report. No full training or deployment was performed. Review the generated audit and source/collection grouping limitations before authorizing further training.
 
 ### Model/backend checks
 
 ```bash
-cd /home/munaz/Projects/AgriSense
+cd /path/to/AgriSense
 model/.venv/bin/python -m pytest model/tests -q
 model/.venv/bin/python -m pip check
 cd backend

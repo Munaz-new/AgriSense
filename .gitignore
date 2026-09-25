@@ -3,6 +3,11 @@
 venv/
 __pycache__/
 *.pyc
+*.pyo
+env/
+ENV/
+.tox/
+.nox/
 .env
 
 # Node / React Native
@@ -38,6 +43,10 @@ htmlcov/
 coverage/
 *.tsbuildinfo
 *.log
+*.tmp
+*.temp
+*~
+.ipynb_checkpoints/
 
 # Phase 2B: datasets, splits, checkpoints, and measured run outputs
 model/data/
@@ -48,6 +57,13 @@ model/runs/
 # Downloaded datasets and archives (keep local originals)
 data/
 datasets/
+# Common extracted dataset roots; application tests live under tests/, not test/.
+/archive/
+/tomato/
+/train/
+/valid/
+/val/
+/test/
 kaggle/
 kaggle.json
 *.zip
@@ -66,6 +82,11 @@ credentials.json
 client_secret*.json
 *.pem
 *.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+.netrc
 .cache/
 .mypy_cache/
 .ruff_cache/
