@@ -29,7 +29,7 @@ function Result({ observation }: { observation: Observation }) {
     <Image accessibilityLabel="Scanned leaf" source={{ uri: `${API_URL}${observation.image_path}` }} style={s.photo} />
     <Text style={s.title}>{observation.disease}</Text>
     <Text style={s.metric}>{observation.severity === null ? 'Severity not estimated' : `${observation.severity}% severity`}</Text>
-    <Text style={s.body}>{observation.confidence}% confidence</Text>
+    <Text style={s.body}>{observation.confidence}% {observation.is_mock ? 'synthetic confidence' : 'model confidence (uncalibrated)'}</Text>
     <Text style={s.notice}>{observation.is_mock ? 'DEVELOPMENT MOCK • Synthetic demo result, not a diagnosis.' : observation.predictor}</Text>
     <Text style={s.muted}>{date(observation.created_at)}</Text>
     <Text style={s.body}>{observation.temperature}°C · {observation.humidity}% humidity</Text>
@@ -121,7 +121,7 @@ export default function App() {
     <StatusBar style="dark" />
     <ScrollView contentContainerStyle={s.page} keyboardShouldPersistTaps="handled">
       <View style={s.header}><Text style={s.brand}>AgriSense</Text><Text style={s.muted}>Your plants, one observation at a time.</Text></View>
-      <Text style={s.notice}>{mockMode === null ? 'PHASE 2A · Connecting to prediction service…' : mockMode ? 'PHASE 2A · DEVELOPMENT-ONLY MOCK PREDICTIONS' : 'PHASE 2A · Image prediction service'}</Text>
+      <Text style={s.notice}>{mockMode === null ? 'Connecting to prediction service…' : mockMode ? 'DEVELOPMENT-ONLY MOCK PREDICTIONS' : 'Image prediction service'}</Text>
       {screen !== 'home' && <Button title="← Home / select plant" secondary disabled={busy} onPress={() => navigate('home')} />}
       {error ? <Text accessibilityRole="alert" style={s.error}>{error}</Text> : null}
       {busy && <ActivityIndicator accessibilityLabel="Loading" color="#19734a" />}
@@ -169,12 +169,12 @@ export default function App() {
             <View style={s.row}>{(['Dry', 'Normal', 'Wet'] as SoilCondition[]).map(value =>
               <Button key={value} title={value} secondary={condition !== value} disabled={busy} onPress={() => { setCondition(value); setPrediction(null); }} />)}</View>
             <Text style={s.muted}>Enter environmental details manually. Only the image is sent to the predictor.</Text>
-            <Button title="Start analysis (mock)" disabled={busy} onPress={() => void analyze()} />
+            <Button title={mockMode ? 'Start analysis (mock)' : 'Start analysis'} disabled={busy} onPress={() => void analyze()} />
             {prediction && <View style={s.card}>
               <Text style={s.title}>Analysis preview · not saved</Text>
               <Text style={s.title}>{prediction.disease}</Text>
               <Text style={s.metric}>{prediction.severity === null ? 'Severity not estimated' : `${prediction.severity}% severity`}</Text>
-              <Text style={s.body}>{prediction.confidence}% confidence</Text>
+              <Text style={s.body}>{prediction.confidence}% {prediction.is_mock ? 'synthetic confidence' : 'model confidence (uncalibrated)'}</Text>
               <Text style={s.notice}>{prediction.is_mock ? 'DEVELOPMENT MOCK • Synthetic demo result, not a diagnosis.' : prediction.predictor}</Text>
               <Button title="Save observation" disabled={busy} onPress={() => void saveScan()} />
             </View>}

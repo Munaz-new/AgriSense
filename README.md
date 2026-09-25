@@ -1,8 +1,14 @@
-# AgriSense — Phase 3B: training readiness verified
+# AgriSense — Phase 3C: local inference integration readiness
 
 A student mini-project using Expo + React Native + TypeScript, FastAPI, and SQLite.
 
 **The running application still uses development-only mock predictions. Phase 3B materialized the validated Phase 3A manifest and passed one disposable CPU sanity batch: 11 images across all 11 tomato classes, one optimizer step. No full training or trained checkpoint was produced.** See the [Phase 3B readiness report](model/PHASE3B_READINESS.md) for measurements and Windows readiness limitations. Further training requires user approval. The mock always labels the image “Early Blight” and uses an image hash to produce repeatable synthetic severity (10–70%) and confidence (85–95%). These numbers do not measure plant health or model accuracy. Different images can demonstrate the dashboard; repeated identical images produce identical values.
+
+Phase 3C adds inference-output checks and safe API failure handling for a future
+trained checkpoint. **Real inference is unavailable until a trained, evaluated
+checkpoint is supplied and explicitly integrated.** No model has been activated.
+See the [Phase 3C readiness report](model/PHASE3C_READINESS.md) for the verified
+class mapping, preprocessing, mock flow, tests, and remaining plant-recognition gap.
 
 ## Flow
 
@@ -407,6 +413,15 @@ The CLI first applies the existing technical image checks. Checkpoint loading us
 ### Backend readiness and current safety state
 
 The default `create_app()` **still constructs `MockPredictor`**, even if a checkpoint later appears. The UI and `/health` continue to identify development-only mock mode. The existing synthetic mock severity/confidence are unchanged and are not model performance.
+
+Phase 3C validates inference logits before selecting a class: one finite
+floating-point row with exactly the configured number of classes (11 for tomato).
+Inference explicitly disables augmentation and shares validation preprocessing.
+The future trained adapter translates model runtime/output failures into a generic
+HTTP 503 on both preview and save routes, without a mock fallback, image upload,
+or observation write. Checkpoint-loading failures still stop adapter construction.
+The frontend uses service mode for its analysis label, identifies mock confidence
+as synthetic, and labels future model confidence as uncalibrated.
 
 `backend/app/prediction.py` now includes `TrainedTomatoPredictor(checkpoint_path)`, which lazily loads the guarded classifier and implements the existing image-only `predict(bytes) -> Prediction` contract. A future explicit integration can pass this adapter to `create_app(predictor=...)` after dataset/model evaluation and installing model dependencies in the backend environment. It is not activated in Phase 2B, is tomato-only, and never receives environmental fields. Missing checkpoints fail construction; the current default app remains mock without needing PyTorch installed in its environment.
 

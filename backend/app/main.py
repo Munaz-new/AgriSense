@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
 from .database import connect, initialize
-from .prediction import MockPredictor, Prediction, Predictor
+from .prediction import MockPredictor, Prediction, PredictionUnavailableError, Predictor
 from .image_validation import (MAX_IMAGE_BYTES, PlantImageValidator, TechnicalPlantImageValidator,
                                ValidationResult, image_extension)
 
@@ -116,6 +116,13 @@ def create_app(database_path: Path | None = None, upload_dir: Path | None = None
             raise HTTPException(status, detail=validation.model_dump())
         return data, validation
 
+    def predict_image(data: bytes) -> Prediction:
+        try:
+            return predictor.predict(data)
+        except PredictionUnavailableError as error:
+            # Do not leak model paths/errors, substitute a mock, or persist a failed scan.
+            raise HTTPException(503, 'Prediction service unavailable. No observation was saved.') from error
+
     @app.post("/validate-image", response_model=ValidationResult)
     async def validate_image(image: Annotated[UploadFile, File()]):
         _, validation = await validated_image(image)
@@ -124,7 +131,7 @@ def create_app(database_path: Path | None = None, upload_dir: Path | None = None
     @app.post("/predict", response_model=Prediction)
     async def predict(image: Annotated[UploadFile, File()]):
         data, _ = await validated_image(image)
-        return predictor.predict(data)
+        return predict_image(data)
 
     @app.post("/plants/{plant_id}/observations", response_model=Observation, status_code=201)
     async def add_observation(
@@ -142,7 +149,7 @@ def create_app(database_path: Path | None = None, upload_dir: Path | None = None
         data, _ = await validated_image(image)
         extension = image_extension(data)
         # Environmental context deliberately never crosses the predictor boundary.
-        result = predictor.predict(data)
+        result = predict_image(data)
         observation_id = str(uuid4())
         filename = f"{observation_id}.{extension}"
         observation = dict(id=observation_id, plant_id=plant_id, image_path=f"/uploads/{filename}",

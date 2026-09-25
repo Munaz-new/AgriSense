@@ -16,6 +16,10 @@ class Predictor(Protocol):
     def predict(self, image: bytes) -> Prediction: ...
 
 
+class PredictionUnavailableError(RuntimeError):
+    """Inference failed; callers must not substitute a result or save an observation."""
+
+
 class MockPredictor:
     """Synthetic, repeatable demo values. Does NOT diagnose disease or inspect leaves."""
     def predict(self, image: bytes) -> Prediction:
@@ -49,4 +53,7 @@ class TrainedTomatoPredictor:
         self.classifier = TomatoClassifier(checkpoint, expected_config=load_config())
 
     def predict(self, image: bytes) -> Prediction:
-        return Prediction(**self.classifier.predict(image))
+        try:
+            return Prediction(**self.classifier.predict(image))
+        except (ValueError, RuntimeError, OSError) as error:
+            raise PredictionUnavailableError('Model inference is unavailable.') from error

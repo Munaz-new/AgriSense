@@ -13,9 +13,14 @@ class CropClassifier:
 
     def predict(self, image: bytes) -> dict:
         with Image.open(BytesIO(image)) as decoded:
-            tensor = preprocess(decoded, self.config.image_size).unsqueeze(0)
+            tensor = preprocess(decoded, self.config.image_size, augment=False).unsqueeze(0)
         with torch.inference_mode():
-            probabilities = torch.softmax(self.model(tensor), dim=1)[0]
+            logits = self.model(tensor)
+            if (not isinstance(logits, torch.Tensor)
+                    or logits.shape != (1, self.config.num_classes)
+                    or not logits.is_floating_point() or not torch.isfinite(logits).all()):
+                raise ValueError('Model produced invalid logits for the configured class mapping.')
+            probabilities = torch.softmax(logits, dim=1)[0]
         if not torch.isfinite(probabilities).all():
             raise ValueError('Model produced invalid probabilities.')
         index = int(probabilities.argmax())

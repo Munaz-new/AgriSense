@@ -1,13 +1,17 @@
 """Model integration readiness without importing torch or enabling a real model."""
 from io import BytesIO
+from pathlib import Path
 import sqlite3
+import sys
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 from PIL import Image
 from fastapi.testclient import TestClient
 import pytest
 
 from app.database import connect, initialize
 from app.main import create_app
-from app.prediction import Prediction, TrainedTomatoPredictor
+from app.prediction import Prediction, PredictionUnavailableError, TrainedTomatoPredictor
 
 
 def test_default_is_mock_and_missing_model_is_refused(tmp_path):
@@ -66,3 +70,65 @@ def test_old_database_migration_preserves_rows_and_foreign_keys(tmp_path):
         assert next(row for row in db.execute('PRAGMA table_info(observations)') if row['name'] == 'severity')['notnull'] == 0
         db.execute('UPDATE observations SET severity = NULL WHERE id = ?', ('o',))
         assert db.execute('SELECT severity FROM observations').fetchone()[0] is None
+
+
+def test_adapter_passes_expected_config_to_guarded_loader(monkeypatch):
+    # Replace modules in memory: no torch dependency and no checkpoint file created.
+    config = object()
+    classifier = Mock()
+    classifier.predict.return_value = dict(disease='test-only', severity=None, confidence=0,
+                                          predictor='test-stub', is_mock=True)
+    factory = Mock(return_value=classifier)
+    monkeypatch.setitem(sys.modules, 'model.agrisense_model.inference',
+                        SimpleNamespace(TomatoClassifier=factory))
+    monkeypatch.setitem(sys.modules, 'model.agrisense_model.config',
+                        SimpleNamespace(load_config=lambda: config))
+    with patch.object(Path, 'is_file', return_value=True):
+        adapter = TrainedTomatoPredictor('unused-test-double')
+    factory.assert_called_once_with(Path('unused-test-double'), expected_config=config)
+    result = adapter.predict(b'test-only-image-boundary')
+    classifier.predict.assert_called_once_with(b'test-only-image-boundary')
+    assert result.severity is None and result.is_mock is True
+
+
+@pytest.mark.parametrize('error', [ValueError('bad logits'), RuntimeError('runtime failed'), OSError('read failed')])
+def test_adapter_translates_failures_without_mock_fallback(error):
+    # Avoid construction: only exercise runtime error translation on a test double.
+    adapter = object.__new__(TrainedTomatoPredictor)
+    adapter.classifier = Mock()
+    adapter.classifier.predict.side_effect = error
+    with pytest.raises(PredictionUnavailableError, match='unavailable'):
+        adapter.predict(b'test-only-image-boundary')
+
+
+def test_inference_failure_returns_503_without_saving_or_fallback(tmp_path):
+    class UnavailablePredictor:
+        def __init__(self):
+            self.calls = 0
+
+        def predict(self, image):
+            self.calls += 1
+            raise PredictionUnavailableError('private internal model error')
+
+    predictor = UnavailablePredictor()
+    uploads = tmp_path / 'uploads'
+    with TestClient(create_app(tmp_path / 'test.db', uploads, predictor)) as client:
+        assert client.get('/health').json()['is_mock'] is False
+        plant_id = client.post('/plants', json={'name': 'Tomato'}).json()['id']
+        image = BytesIO()
+        # Deliberately not a plant: technical acceptance makes no semantic claim.
+        Image.new('RGB', (256, 256), 'gray').save(image, format='PNG')
+        validation = client.post('/validate-image', files={'image': ('fixture.png', image.getvalue())})
+        assert validation.json()['reason'] == 'technical_checks_passed'
+        assert 'not been verified' in validation.json()['message']
+        for route in ['/predict', f'/plants/{plant_id}/observations']:
+            response = client.post(route, files={'image': ('fixture.png', image.getvalue())},
+                                   data={'temperature': 25, 'humidity': 65, 'soil_type': 'Loamy',
+                                         'soil_condition': 'Normal'})
+            assert response.status_code == 503
+            assert response.json() == {'detail': 'Prediction service unavailable. No observation was saved.'}
+        assert predictor.calls == 2
+        assert client.get(f'/plants/{plant_id}/observations').json() == []
+        assert list(uploads.iterdir()) == []
+        assert client.post('/predict', files={'image': ('bad.png', b'invalid')}).status_code == 415
+        assert predictor.calls == 2  # Validation still precedes the inference boundary.
