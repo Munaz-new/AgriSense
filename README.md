@@ -1,4 +1,4 @@
-# AgriSense — Phase 3C: local inference integration readiness
+# AgriSense — Phase 4A: real model training preparation
 
 A student mini-project using Expo + React Native + TypeScript, FastAPI, and SQLite.
 
@@ -9,6 +9,11 @@ trained checkpoint. **Real inference is unavailable until a trained, evaluated
 checkpoint is supplied and explicitly integrated.** No model has been activated.
 See the [Phase 3C readiness report](model/PHASE3C_READINESS.md) for the verified
 class mapping, preprocessing, mock flow, tests, and remaining plant-recognition gap.
+
+Phase 4A prepares reproducible training, best/last checkpoints, completed-epoch
+resume, and a Windows configuration example. **Real training has not started.**
+The [Phase 4A report and Windows steps](model/PHASE4A_READINESS.md) document the
+read-only preflight command, future training command, and outstanding machine checks.
 
 ## Flow
 
@@ -216,6 +221,7 @@ model/
     data.py                     # Folder scanning, split manifests, preprocessing, Dataset
     preparation.py              # Read-only train/valid curation and exclusion audit
     engine.py                   # Training/validation loop and classification metrics
+    training.py                 # Preflight, run outputs, best/last checkpoints and resume
     checkpoints.py              # Versioned checkpoint saving and guarded loading
     inference.py                # Image-only checkpoint classifier
   prepare_data.py               # Build/audit split manifest; no image copying
@@ -378,13 +384,20 @@ versioned `model/configs/tomato.json` provides reusable settings with relative p
 The new safety/portability tests use temporary fixtures and perform no optimizer
 updates. The completed real-data check has not been rerun for checkpoint packaging.
 
-Future training command — **not run during Phase 2B or Phase 3A**:
+Future training command — **requires separate approval; not executed in Phase 4A**:
 
 ```bash
 model/.venv/bin/python -m model.train --config model/configs/tomato.local.json --device cpu
 ```
 
-Default settings in `model/configs/tomato.json`: image size 224, batch size 16, learning rate 0.0003, epochs 30, seed 42, and the exact ordered eleven-class tomato list. Dataset, manifest, checkpoint, and report paths are configurable. Relative data/output paths resolve from the repository root, not the shell's current directory. An optional `--device cuda` requires separately installing a matching CUDA-enabled PyTorch build and suitable hardware; CPU is the tested setup. Deterministic operations are requested; identical results across devices/PyTorch versions are not guaranteed.
+Default settings in `model/configs/tomato.json`: image size 224, batch size 16, learning rate 0.0003, epochs 30, seed 42, AdamW with weight decay 0.01, and the exact ordered eleven-class tomato list including `powdery_mildew`. SGD is also configurable with momentum (default 0.9). Dataset, manifest, checkpoint, and report paths are configurable. Relative data/output paths resolve from the repository root, not the shell's current directory. An optional `--device cuda` requires separately installing a matching CUDA-enabled PyTorch build and suitable hardware; CPU is the tested setup. Deterministic operations are requested; identical results across devices/PyTorch versions are not guaranteed.
+
+`model.train --check-only` performs read-only manifest/device/output validation and
+does not create batches or train. The training CLI supports overrides for dataset
+root, epochs, batch size, learning rate, optimizer, weight decay, and checkpoint
+path. `model/configs/tomato.windows.example.json` is a portable template; copy it
+to an ignored `*.local.json` config and set your own paths. Follow the Phase 4A
+report to transfer the existing manifest unchanged rather than resplitting data.
 
 Training validates after each epoch and saves the model with the lowest validation loss at:
 
@@ -392,7 +405,25 @@ Training validates after each epoch and saves the model with the lowest validati
 model/checkpoints/tomato_hybrid_best.pt
 ```
 
-Checkpoint format v2 binds the crop and ordered class mapping with a digest. Inference/evaluation compare this against the requested configuration before constructing the model; old format-v1 checkpoints are rejected. The checkpoint contains state dictionaries, ordered classes/configuration, preprocessing version, completed epoch and optimizer-step counts, actual validation loss, and the split-manifest digest. Epoch records go to `model/checkpoints/tomato_hybrid_best.history.json`. Existing checkpoints are not overwritten by a new training invocation; configure a new path for a new experiment. There is no resume-training CLI yet.
+Checkpoint format v2 still binds the crop and ordered class mapping with a digest,
+preserving Phase 3C inference compatibility. The best checkpoint contains model
+weights, configuration, preprocessing version, completed epoch/step counts, measured
+validation loss, and manifest digest. Its optimizer-state entry is empty: use the
+separate last checkpoint for resume. With the default path, outputs are:
+
+- `model/checkpoints/tomato_hybrid_best.pt`: best validation-loss model.
+- `model/checkpoints/tomato_hybrid_best.last.pt`: last completed epoch, optimizer,
+  best-model snapshot and resume metadata.
+- `model/checkpoints/tomato_hybrid_best.history.json`: measured epoch records.
+- `model/checkpoints/tomato_hybrid_best.run.json`: configuration and runtime metadata.
+
+All remain ignored. New runs, including resume, require an unused output prefix
+outside the source dataset. `--resume` accepts only a Phase 4A last checkpoint;
+`--epochs` is the total target epoch count. Class order, manifest digest, training
+settings and recorded runtime must match. The new prefix preserves the old run and
+restores its best model even when later epochs do not improve. Only completed
+epochs resume; an interrupted partial epoch is repeated. Best/legacy checkpoints
+cannot resume. See the Phase 4A report for the proposed Windows commands.
 
 Future evaluation command — **not run against any real dataset/checkpoint yet**:
 

@@ -16,7 +16,8 @@ def class_mapping_digest(config):
                              ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
 
 
-def save_checkpoint(path: Path, model, optimizer, config, epoch, steps, validation_loss, split_digest):
+def save_checkpoint(path: Path, model, optimizer, config, epoch, steps, validation_loss, split_digest,
+                    training_state=None):
     if epoch < 1 or steps < 1 or not math.isfinite(validation_loss):
         raise ValueError('Refusing to label an untrained/nonfinite model as a trained checkpoint.')
     payload = {
@@ -24,8 +25,11 @@ def save_checkpoint(path: Path, model, optimizer, config, epoch, steps, validati
         'completed_epochs': epoch, 'optimizer_steps': steps,
         'validation_loss': validation_loss, 'manifest_digest': split_digest,
         'config': config.to_dict(), 'preprocessing': PREPROCESSING,
-        'state_dict': model.state_dict(), 'optimizer_state_dict': optimizer.state_dict(),
+        'state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict() if optimizer is not None else {},
     }
+    if training_state is not None:
+        payload['training_state'] = training_state
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix('.tmp')
     torch.save(payload, temporary)

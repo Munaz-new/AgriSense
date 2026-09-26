@@ -1,7 +1,7 @@
 {
-  "dataset_path": "model/data/tomato",
+  "dataset_path": "../tomato-dataset",
   "manifest_path": "model/data/tomato_splits.json",
-  "checkpoint_path": "model/checkpoints/tomato_hybrid_best.pt",
+  "checkpoint_path": "model/checkpoints/tomato_run_01/best.pt",
   "report_path": "model/reports/tomato_test.json",
   "image_size": 224,
   "batch_size": 16,

@@ -24,6 +24,9 @@ class Config:
     image_size: int = 224
     batch_size: int = 16
     learning_rate: float = 0.0003
+    optimizer: str = 'adamw'
+    weight_decay: float = 0.01
+    momentum: float = 0.9
     epochs: int = 30
     seed: int = 42
     validation_fraction: float = 0.15
@@ -59,6 +62,11 @@ class Config:
             raise ValueError('Image size must divide into patches; embedding dimension must divide into attention heads.')
         if not math.isfinite(self.learning_rate) or self.learning_rate <= 0 or not 0 <= self.dropout < 1:
             raise ValueError('Invalid learning rate or dropout.')
+        if self.optimizer not in {'adamw', 'sgd'}:
+            raise ValueError('optimizer must be adamw or sgd.')
+        if (not math.isfinite(self.weight_decay) or self.weight_decay < 0
+                or not math.isfinite(self.momentum) or not 0 <= self.momentum < 1):
+            raise ValueError('Invalid weight decay or SGD momentum.')
         if not (0 < self.validation_fraction < 1 and 0 < self.test_fraction < 1
                 and self.validation_fraction + self.test_fraction < 1):
             raise ValueError('Validation/test fractions must leave a nonempty training split.')

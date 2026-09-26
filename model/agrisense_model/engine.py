@@ -11,10 +11,12 @@ def seed_everything(seed):
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.use_deterministic_algorithms(True)
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
 
 
-def loader(config, manifest, split):
-    generator = torch.Generator().manual_seed(config.seed)
+def loader(config, manifest, split, seed=None):
+    generator = torch.Generator().manual_seed(config.seed if seed is None else seed)
     return DataLoader(CropDataset(config, manifest, split), batch_size=config.batch_size,
                       shuffle=split == 'train', num_workers=0, generator=generator)
 
