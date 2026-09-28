@@ -2,15 +2,30 @@ import { Platform } from 'react-native';
 import type { ImagePickerAsset } from 'expo-image-picker';
 
 export const API_URL = (process.env.EXPO_PUBLIC_API_URL || 'http://localhost:8000').replace(/\/$/, '');
-export type Plant = { id: string; name: string; created_at: string };
+export type Plant = { id: string; name: string; created_at: string; crop_name: string | null };
 export type SoilCondition = 'Dry' | 'Normal' | 'Wet';
 export type Observation = {
   id: string; plant_id: string; image_path: string; created_at: string;
-  disease: string; severity: number | null; confidence: number; predictor: string; is_mock: boolean;
+  disease: string | null; severity: number | null; confidence: number | null; predictor: string | null; is_mock: boolean;
+  analysis_status: 'not_requested' | 'completed' | 'legacy_unknown';
+  observed_at: string | null; tracking_ref: string | null; notes: string | null;
+  request_id: string | null; duplicate_of: string | null; checkpoint_id: string | null;
+  severity_source: string | null; severity_method: string | null; severity_version: string | null; severity_scale: string | null;
   temperature: number; humidity: number; soil_type: string; soil_condition: SoilCondition;
 };
 export type ValidationResult = { is_valid: boolean; reason: string; message: string };
-export type Prediction = Pick<Observation, 'disease' | 'severity' | 'confidence' | 'predictor' | 'is_mock'>;
+export type Prediction = { disease: string; severity: number | null; confidence: number; predictor: string; is_mock: boolean };
+export type Progression = {
+  status: 'unavailable' | 'insufficient_data' | 'improving' | 'stable' | 'worsening';
+  reason: string | null; message: string; delta: number | null; tracking_ref: string | null;
+  previous_id: string | null; latest_id: string | null;
+  previous_observed_at: string | null; latest_observed_at: string | null;
+  policy_version: string | null; measurement: Record<string, string> | null;
+};
+export type Health = { status: string; prediction_mode: string; is_mock: boolean;
+  capabilities: { record_only: boolean; validated_analysis: boolean; severity_measurement: boolean; health_progression: boolean };
+  analysis_message: string };
+export type RecordDetails = { request_id: string; observed_at: string | null; tracking_ref: string | null; notes: string | null };
 export class ImageValidationError extends Error {
   constructor(public validation: ValidationResult) { super(validation.message); }
 }
@@ -47,12 +62,20 @@ async function imageForm(image: ImagePickerAsset): Promise<FormData> {
 }
 
 export const api = {
-  health: () => request<{ status: string; prediction_mode: string; is_mock: boolean }>('/health'),
+  health: () => request<Health>('/health'),
   plants: () => request<Plant[]>('/plants'),
-  addPlant: (name: string) => request<Plant>('/plants', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }),
+  addPlant: (name: string, cropName: string | null = null) => request<Plant>('/plants', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, crop_name: cropName }),
   }),
   observations: (id: string) => request<Observation[]>(`/plants/${id}/observations`),
+  progression: (id: string, trackingRef = '') => request<Progression>(`/plants/${id}/progression${trackingRef.trim() ? `?tracking_ref=${encodeURIComponent(trackingRef.trim())}` : ''}`),
+  async record(id: string, image: ImagePickerAsset, environment: Environment, details: RecordDetails) {
+    const form = await imageForm(image);
+    for (const [key, value] of Object.entries({ ...environment, ...details })) {
+      if (value !== null) form.append(key, String(value));
+    }
+    return request<Observation>(`/plants/${id}/records`, { method: 'POST', body: form });
+  },
   async validateImage(image: ImagePickerAsset) {
     return request<ValidationResult>('/validate-image', { method: 'POST', body: await imageForm(image) });
   },

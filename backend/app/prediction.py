@@ -1,5 +1,5 @@
 """Image-only boundary: replace MockPredictor with the trained model later."""
-from hashlib import sha256
+from hashlib import file_digest, sha256
 from typing import Protocol
 from pydantic import BaseModel, Field
 
@@ -51,6 +51,9 @@ class TrainedTomatoPredictor:
         from model.agrisense_model.inference import TomatoClassifier
         from model.agrisense_model.config import load_config
         self.classifier = TomatoClassifier(checkpoint, expected_config=load_config())
+        # Actual artifact identity, only after guarded loading succeeds. No placeholder ID.
+        with checkpoint.open('rb') as source:
+            self.checkpoint_id = 'sha256:' + file_digest(source, 'sha256').hexdigest()
 
     def predict(self, image: bytes) -> Prediction:
         try:

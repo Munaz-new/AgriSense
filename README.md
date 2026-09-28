@@ -1,8 +1,20 @@
-# AgriSense — Phase 4A: real model training preparation
+# AgriSense — Phase 5: model-independent plant records
 
 A student mini-project using Expo + React Native + TypeScript, FastAPI, and SQLite.
 
-**The running application still uses development-only mock predictions. Phase 3B materialized the validated Phase 3A manifest and passed one disposable CPU sanity batch: 11 images across all 11 tomato classes, one optimizer step. No full training or trained checkpoint was produced.** See the [Phase 3B readiness report](model/PHASE3B_READINESS.md) for measurements and Windows readiness limitations. Further training requires user approval. The mock always labels the image “Early Blight” and uses an image hash to produce repeatable synthetic severity (10–70%) and confidence (85–95%). These numbers do not measure plant health or model accuracy. Different images can demonstrate the dashboard; repeated identical images produce identical values.
+**The current frontend saves observations without model analysis. No trained model
+is active.** Photos, supplied environmental context, optional observation times,
+leaf/site references and notes can be recorded without generating disease,
+confidence or severity values. See [Phase 5 readiness](PHASE5_READINESS.md).
+
+The legacy prediction API still uses the explicitly labelled development mock by
+default, for compatibility and development tests. The Phase 5 frontend does not
+call it. Historical mock records remain labelled synthetic and cannot establish
+real health progression. A trained classifier alone will not provide severity.
+
+Phase 3B materialized the validated manifest and ran a disposable CPU sanity batch;
+no full training or trained checkpoint was produced. The Phase 3B/3C/4A preparation
+code and reports remain preserved.
 
 Phase 3C adds inference-output checks and safe API failure handling for a future
 trained checkpoint. **Real inference is unavailable until a trained, evaluated
@@ -17,7 +29,7 @@ read-only preflight command, future training command, and outstanding machine ch
 
 ## Flow
 
-Add/select plant → capture/select image → local preview → validate image → reject on failure, or unlock environmental fields on success → enter temperature, humidity, soil type and soil condition → start mock analysis → review unsaved result → save observation → result / plant history / severity dashboard.
+Add/select a physical plant → capture/select photo → technical validation → enter environmental context and optional observation metadata → save without analysis → record / plant history / comparison availability.
 
 Environmental details are stored as context. They are **never passed to the predictor**. No hardware, sensors, sensor APIs, authentication, payments, containers, or cloud services are used.
 
@@ -31,7 +43,7 @@ Environmental details are stored as context. They are **never passed to the pred
 - Each dimension is at least 224 pixels and at most 8192 pixels; total area is at most 24 million pixels. These are explicit MVP input limits, not evidence of plant content or trained-model requirements.
 - Still images only; animated images and decompression-bomb images are rejected.
 
-**There is no plant-versus-non-plant classifier. A technically valid poster, screenshot, or unrelated photo can still pass and receive a synthetic mock result.** Validation does not assess plant content, blur, framing, crop identity, disease, or severity. There are no green-pixel heuristics or simulated recognition claims. The UI labels success as technical checks only and explains this limitation before analysis.
+**There is no plant-versus-non-plant classifier. A technically valid poster, screenshot, or unrelated photo can still pass technical validation. Record-only saving makes no semantic or disease claim; the legacy mock endpoint can still return synthetic results.** Validation does not assess plant content, blur, framing, crop identity, disease, or severity. There are no green-pixel heuristics or simulated recognition claims. The UI labels success as technical checks only and explains this limitation before saving.
 
 `PlantImageValidator.validate(image: bytes) -> ValidationResult` is the extension point for future semantic validation. A future implementation should compose the technical validator with a trained and evaluated plant/leaf suitability model. No such model is implemented in Phase 2A.
 
@@ -95,32 +107,64 @@ Camera capture requests permission on native devices. Browser camera/file behavi
 
 For a browser accessed through a LAN hostname/IP instead of localhost, set `AGRISENSE_CORS_ORIGINS` to that exact frontend origin before starting the backend, e.g. `http://192.168.1.10:8081`.
 
-## Demo walkthrough
+## Record-only walkthrough
 
-1. Add “Tomato” on Home. It becomes the selected plant.
-2. Choose **New scan**, then capture or select a leaf photo. Its local preview appears; environmental inputs and analysis remain unavailable.
-3. Tap **Validate image**. A failure shows its reason and keeps analysis blocked. Choose a replacement and validate again. Success explicitly says that plant content has not been verified.
-4. After successful validation, enter temperature (°C, -50 to 70), humidity (%, 0 to 100), soil type (e.g. Loamy), and Dry / Normal / Wet.
-5. Tap **Start analysis (mock)** to see an unsaved disease/severity/confidence preview. Nothing has been added to history yet.
-6. Tap **Save observation** to persist the scan and display the saved result. The existing observation endpoint revalidates and recomputes the result instead of trusting client-supplied prediction values. The deterministic mock returns the same values for the same image. For a future nondeterministic model, a server-owned prediction record would be needed to persist exactly a previous preview.
-7. Open **Plant history** for newest-first records, or **Health dashboard** for chronological severity bars on a fixed 0–100% scale and change in percentage points.
-8. Replacing an image clears validation, environmental inputs, and the analysis preview. Changing environmental details clears the preview so it can be reviewed again before saving. Selecting another plant also clears image approval.
-9. Try a small image (under 224 pixels on either side), corrupt file, or unsupported format through the API; verify that prediction and history are untouched. A valid unrelated image may pass: this intentionally demonstrates the semantic-validation limitation.
+1. Add a unique plant name/identifier. Optionally supply its crop name; the app does
+   not identify crops from photos or infer species from plant names.
+2. Choose **New observation**, select/capture a photo, and **Validate image**.
+3. Enter temperature, humidity, soil type and soil condition. Optionally enter a
+   timezone-qualified observation time, leaf/site reference and notes. Unknown
+   observation time stays null; save time is recorded separately.
+4. Choose **Save observation without analysis**. No predictor is called. Disease,
+   confidence and severity stay null, with explicit unavailable messages.
+5. History is newest first; the dashboard is chronological. Ordering uses supplied
+   observation time with save time as a labelled fallback. Old records are retained.
+6. The comparison panel uses the server's unavailable/insufficient-data result.
+   It never derives severity from confidence, disease labels or environmental data.
+7. If saving times out, keep the pending form open and check history. **Retry the
+   same save** retains its request ID and returns the original saved record. Fields
+   remain locked to prevent changing an uncertain submission. Discarding a form
+   never deletes a saved observation. Pending forms do not survive app restart;
+   inspect history before starting a fresh submission after restarting.
 
-If a request times out, refresh history before retrying: the backend may already have saved the scan. There is no offline queue or automatic submission retry in Phase 2A.
+Newly saved identical image bytes for the same plant are flagged as reused evidence,
+not deleted. This is exact-byte detection, not near-duplicate or same-leaf recognition;
+older records with unknown image hashes are not retroactively matched.
+
 
 ## API contract
 
 | Method | Endpoint | Input / behavior |
 | --- | --- | --- |
-| GET | `/health` | Status and development mock mode |
-| POST | `/plants` | JSON `{ "name": "Tomato" }`; returns plant with UUID and UTC timestamp |
+| GET | `/health` | Legacy predictor mode plus record-only / validated-analysis / severity / progression capabilities |
+| POST | `/plants` | JSON `name` and optional `crop_name`; returns UUID and UTC save timestamp |
 | GET | `/plants` | Plants, newest first |
 | GET | `/plants/{plant_id}` | One plant, or 404 |
 | POST | `/plants/{plant_id}/observations` | Multipart `image`, `temperature`, `humidity`, `soil_type`, `soil_condition`; revalidates, predicts, and saves; existing Phase 1 contract retained |
-| GET | `/plants/{plant_id}/observations` | Observations, oldest first; unknown plant returns 404 |
+| GET | `/plants/{plant_id}/observations` | All records, oldest first by observed time with save-time fallback; unknown plant returns 404 |
+| POST | `/plants/{plant_id}/records` | Validated record-only save; image, environmental fields and request ID required; no predictor call |
+| GET | `/plants/{plant_id}/progression` | Optional `tracking_ref`; explicit comparison availability and reason; no policy enabled |
 | POST | `/validate-image` | Multipart `image` only; technical validation, no prediction or persistence |
 | POST | `/predict` | Multipart `image` only; revalidate and preview prediction without saving an image or observation |
+
+`POST /records` also accepts optional `observed_at` (timezone required, not future),
+`tracking_ref` (up to 100 characters), and `notes` (up to 2,000 characters). Required
+`request_id` is 8–100 ASCII letters/digits/underscores/hyphens. A new record returns
+201; a same-content retry for the same plant/request ID returns 200 with the original
+record; different content with that ID returns 409. No client-supplied prediction
+fields are persisted. The existing analyzed-save endpoint retains its previous
+behavior and does not gain retry protection in this phase.
+
+Record responses add `analysis_status`, optional observation/provenance metadata,
+`request_id`, `image_sha256`, and `duplicate_of`. `not_requested` guarantees null
+disease/severity/confidence/predictor values. `legacy_unknown` means older analysis
+metadata was not reconstructed. `is_mock=false` alone never means a record was
+analyzed. Both frontend and backend contracts now permit absent analysis fields.
+
+Database initialization transactionally migrates known older schemas to
+`PRAGMA user_version=1`. Original fields are preserved; new historical fields remain
+null/unknown. Future or unrecognized schemas fail without partially migrating.
+Back up a valued local database before first running upgraded application code.
 
 Validation success returns HTTP 200 with `is_valid`, `reason`, and `message`:
 
@@ -146,7 +190,7 @@ Validation failures use the same shape inside FastAPI's `detail` field:
 
 HTTP 413 means oversized file; 415 means unsupported format or unreadable/corrupted image; 422 covers empty uploads, unsuitable dimensions, animation, or a future semantic rejection. A missing multipart `image` field uses FastAPI's normal 422 request-validation error. The frontend displays the server's validation message and clears approval after a validation rejection.
 
-Prediction fields (confidence and any estimated severity use **0–100**, not fractions; `severity` can now be `null` when unavailable):
+Legacy prediction fields (confidence and any estimated severity use **0–100**, not fractions; `severity` can now be `null` when unavailable):
 
 ```json
 {
@@ -158,7 +202,7 @@ Prediction fields (confidence and any estimated severity use **0–100**, not fr
 }
 ```
 
-This is an illustrative response, not a fixed result. A saved observation adds `id`, `plant_id`, `image_path`, `created_at` (UTC ISO 8601), and all four environmental fields. The crop name is stored once in the plants table and referenced by `plant_id`. `image_path` is an API-relative URL (`/uploads/<uuid>.png`). Images are served by the backend for local history previews.
+This is an illustrative response, not a fixed result. A legacy analyzed observation adds `id`, `plant_id`, `image_path`, `created_at` (UTC ISO 8601), and all four environmental fields. The crop name is stored once in the plants table and referenced by `plant_id`. `image_path` is an API-relative URL (`/uploads/<uuid>.png`). Images are served by the backend for local history previews.
 
 Upload examples (replace the plant ID and image path):
 
@@ -179,13 +223,16 @@ curl -X POST http://localhost:8000/plants/PLANT_ID/observations \
 - `frontend/App.tsx`: simple state-based screens and shared UI components.
 - `frontend/src/api.ts`: typed API client and native/browser multipart handling.
 - `backend/app/main.py`: request validation, API routes, uploads, application factory.
-- `backend/app/database.py`: SQLite schema and transactions.
+- `backend/app/database.py`: versioned SQLite migrations and transactions.
+- `backend/app/records.py`: record-only persistence, request deduplication and exact-image reuse flags.
+- `backend/app/progression.py`: comparison eligibility and explicit unavailable states.
+- `frontend/src/recordState.ts`: null-safe labels, explicit timestamps and retry identity.
 - `backend/app/image_validation.py`: validation interface, technical implementation, result schema, input limits.
 - `backend/tests/test_image_validation.py`: validation rejection, side effects, ordering, and future validator boundary tests.
 - `backend/app/prediction.py`: `Predictor` interface, response schema, development mock.
 - `backend/tests/test_api.py`: isolated integration tests using temporary databases/uploads.
 
-To add the trained Hybrid CNN-Transformer later, implement `predict(image: bytes) -> Prediction` and inject that implementation through `create_app(predictor=...)`. Image decoding/preprocessing/inference belong inside that service. Preserve response names and 0–100 units, set `is_mock=False`, and identify the model in `predictor`. The health endpoint identifies the built-in mock, and the UI reads this metadata plus each observation’s `is_mock` flag. No frontend or API contract changes are needed. Keep weights outside Git. Environmental fields remain outside this interface.
+To add the trained Hybrid CNN-Transformer later, implement `predict(image: bytes) -> Prediction` and inject that implementation through `create_app(predictor=...)`. Image decoding/preprocessing/inference belong inside that service. Preserve response names and 0–100 units, set `is_mock=False`, and identify the model in `predictor`. The existing image-only adapter contract is preserved. Phase 5 capability flags deliberately keep validated analysis disabled, including for injected custom predictors; explicit evaluation/approval and a later integration change are required to enable a model workflow. The current UI remains record-only and reads each record’s analysis status and provenance. Keep weights outside Git. Environmental fields remain outside this interface.
 
 ## Checks
 
@@ -196,11 +243,11 @@ cd /path/to/AgriSense/backend
 
 cd /path/to/AgriSense/frontend
 npm run typecheck
-npx expo install --check
-npx expo export --platform all
+npm test
+CI=1 EXPO_OFFLINE=1 npx --no-install expo export --platform web --output-dir /tmp/agrisense-phase5-web
 ```
 
-Backend tests cover unsupported types, corrupt/truncated images, empty/oversized uploads, dimension bounds, all supported formats, animation, no writes or predictor calls on rejection, validation-before-prediction ordering on every route, replacement-image revalidation, the future semantic validator interface, plant creation, invalid input, missing plants, image validation/limits, prediction-only behavior, observation ordering/isolation, stored image retrieval, restart persistence, and the image-only predictor boundary. The frontend checks validate TypeScript, Expo package compatibility, and bundling. Native camera permission/capture should also be exercised on a device using the walkthrough above.
+Backend tests cover unsupported types, corrupt/truncated images, empty/oversized uploads, dimension bounds, all supported formats, animation, no writes or predictor calls on rejection, validation-before-prediction ordering on every route, replacement-image revalidation, the future semantic validator interface, plant creation, invalid input, missing plants, image validation/limits, prediction-only behavior, observation ordering/isolation, stored image retrieval, restart persistence, and the image-only predictor boundary. Phase 5 adds migration, record-only, retry/concurrency, isolation, provenance and progression-eligibility tests. Frontend checks cover TypeScript, record labels, date validation, retry identity, API transport contracts and web bundling. Node tests use the installed Node 22 experimental type-stripping/test-isolation flags; no new test dependencies are required. Native camera permission/capture should also be exercised on a device using the walkthrough above.
 
 Nothing is deployed. `.env`, virtual environments, node_modules, uploads, SQLite data, model weights, caches, and generated bundles are ignored. Commit `package-lock.json` for reproducible JavaScript dependency installation.
 
@@ -443,7 +490,7 @@ The CLI first applies the existing technical image checks. Checkpoint loading us
 
 ### Backend readiness and current safety state
 
-The default `create_app()` **still constructs `MockPredictor`**, even if a checkpoint later appears. The UI and `/health` continue to identify development-only mock mode. The existing synthetic mock severity/confidence are unchanged and are not model performance.
+The default `create_app()` **still constructs `MockPredictor`**, even if a checkpoint later appears. `/health` retains this legacy predictor-mode information while reporting validated analysis unavailable. The Phase 5 UI uses record-only capabilities and never calls the mock predictor. Existing synthetic mock severity/confidence are unchanged and are not model performance.
 
 Phase 3C validates inference logits before selecting a class: one finite
 floating-point row with exactly the configured number of classes (11 for tomato).
@@ -451,12 +498,12 @@ Inference explicitly disables augmentation and shares validation preprocessing.
 The future trained adapter translates model runtime/output failures into a generic
 HTTP 503 on both preview and save routes, without a mock fallback, image upload,
 or observation write. Checkpoint-loading failures still stop adapter construction.
-The frontend uses service mode for its analysis label, identifies mock confidence
-as synthetic, and labels future model confidence as uncalibrated.
+The Phase 5 frontend labels historical mock confidence as synthetic and stored model
+confidence as uncalibrated; record-only observations have neither value.
 
 `backend/app/prediction.py` now includes `TrainedTomatoPredictor(checkpoint_path)`, which lazily loads the guarded classifier and implements the existing image-only `predict(bytes) -> Prediction` contract. A future explicit integration can pass this adapter to `create_app(predictor=...)` after dataset/model evaluation and installing model dependencies in the backend environment. It is not activated in Phase 2B, is tomato-only, and never receives environmental fields. Missing checkpoints fail construction; the current default app remains mock without needing PyTorch installed in its environment.
 
-The response's existing `severity` field now permits `null`, SQLite migrates the old table transactionally while preserving existing observations, and the frontend displays “Severity not estimated” without plotting an invented zero. These small compatibility changes avoid fabricating severity when a classifier is eventually connected. No other app flow has been redesigned.
+Phase 3C established nullable severity. Phase 5 additionally permits absent disease and confidence for record-only observations, preserves legacy records through a versioned transaction, and displays “Severity not measured” without inventing a zero. Actual model-derived severity remains unavailable.
 
 Datasets, split manifests, virtual environments, checkpoints, training histories, and evaluation reports are Git-ignored. The user supplied the local tomato images; no datasets or weights were downloaded by this workflow. Phase 3A prepared metadata only. Phase 3B subsequently completed one disposable optimizer step, as recorded in the readiness report. No full training or deployment was performed. Review the generated audit and source/collection grouping limitations before authorizing further training.
 
@@ -471,8 +518,8 @@ cd backend
 .venv/bin/python -m pip check
 cd ../frontend
 npm run typecheck
-npx expo install --check
-npx expo export --platform all
+npm test
+CI=1 EXPO_OFFLINE=1 npx --no-install expo export --platform web --output-dir /tmp/agrisense-phase5-web
 ```
 
 Model tests check configuration, branch connectivity/shapes, deterministic preprocessing, augmentation restricted to training, split isolation/integrity, missing/untrained checkpoint rejection, probability/report arithmetic using explicitly synthetic test doubles, and a validation loop that makes no parameter updates. Backend tests also check mock defaults, absent checkpoint handling, nullable severity persistence, and migration preservation.
