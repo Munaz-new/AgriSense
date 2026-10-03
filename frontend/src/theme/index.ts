@@ -1,0 +1,17 @@
+import { StyleSheet } from 'react-native';
+export const colors={ green: '#216449',ink: '#203B30',muted: '#607368',paper: '#F5F7F2',line: '#E0E7DC',pale: '#EAF1E5',white: '#FFFFFF' };
+export const s=StyleSheet.create({
+  safe: { flex: 1,backgroundColor: '#E8EDE6' },shell: { flex: 1,width: '100%',maxWidth: 600,alignSelf: 'center',backgroundColor: colors.paper },
+  page: { padding: 20,paddingBottom: 28,gap: 20 },header: { flexDirection: 'row',alignItems: 'center',gap: 10,paddingHorizontal: 20,paddingTop: 15,paddingBottom: 12,borderBottomWidth: 1,borderColor: colors.line,backgroundColor: colors.paper },
+  brand: { fontSize: 23,fontWeight: '800',color: colors.ink,letterSpacing: -0.8 },eyebrow: { fontSize: 11,fontWeight: '700',letterSpacing: 1.8,color: colors.muted,textTransform: 'uppercase' },
+  title: { fontSize: 28,fontWeight: '700',color: colors.ink,letterSpacing: -0.8 },heading: { fontSize: 19,fontWeight: '700',color: colors.ink },body: { fontSize: 15,lineHeight: 23,color: colors.ink },muted: { fontSize: 13,lineHeight: 20,color: colors.muted },
+  card: { backgroundColor: colors.white,borderRadius: 22,padding: 18,gap: 14,borderWidth: 1,borderColor: colors.line },selected: { borderColor: colors.green,backgroundColor: '#F2F7EF' },
+  hero: { backgroundColor: colors.green,borderRadius: 25,padding: 24,gap: 18,overflow: 'hidden' },heroTitle: { fontSize: 32,lineHeight: 37,color: '#FFF',fontWeight: '700',letterSpacing: -1 },heroBody: { fontSize: 14,lineHeight: 22,color: '#DFEBDB',maxWidth: 280 },
+  row: { flexDirection: 'row',alignItems: 'center',gap: 12 },wrap: { flexDirection: 'row',gap: 8,flexWrap: 'wrap' },flex: { flex: 1,minWidth: 0 },section: { gap: 12 },between: { flexDirection: 'row',alignItems: 'center',justifyContent: 'space-between',gap: 12 },
+  metric: { fontSize: 30,fontWeight: '700',color: colors.ink },badge: { backgroundColor: colors.pale,paddingHorizontal: 10,paddingVertical: 5,borderRadius: 20,alignSelf: 'flex-start' },badgeText: { color: colors.green,fontSize: 11,fontWeight: '700' },
+  button: { minHeight: 48,backgroundColor: colors.green,paddingVertical: 13,paddingHorizontal: 16,borderRadius: 14,alignItems: 'center',justifyContent: 'center',flexDirection: 'row',gap: 9 },buttonText: { color: '#FFF',fontWeight: '700',fontSize: 14,textAlign: 'center' },secondary: { backgroundColor: colors.pale },secondaryText: { color: colors.green },disabled: { opacity: 0.45 },
+  field: { gap: 7 },label: { fontSize: 14,fontWeight: '600',color: colors.ink },input: { minHeight: 50,padding: 13,borderRadius: 12,borderWidth: 1,borderColor: '#B7C7B8',backgroundColor: '#FCFDFB',color: colors.ink,fontSize: 16 },
+  notice: { backgroundColor: colors.pale,borderRadius: 14,padding: 14,color: '#405C37',fontSize: 13,lineHeight: 20 },error: { backgroundColor: '#FBE9E5',color: '#912E27',padding: 14,borderRadius: 14,lineHeight: 21 },
+  photo: { width: '100%',height: 230,borderRadius: 16,backgroundColor: colors.pale,resizeMode: 'cover' },thumbnail: { width: 64,height: 72,borderRadius: 14,backgroundColor: colors.pale },placeholder: { minHeight: 145,backgroundColor: '#EDF3E8',borderRadius: 18,justifyContent: 'center',alignItems: 'center',gap: 12,padding: 16 },
+  divider: { height: 1,backgroundColor: colors.line },empty: { alignItems: 'center',paddingVertical: 18,gap: 12 },link: { minHeight: 44,justifyContent: 'center' },linkText: { fontSize: 13,color: colors.green,fontWeight: '700' },
+});

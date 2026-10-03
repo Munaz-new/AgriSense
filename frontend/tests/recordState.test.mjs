@@ -1,7 +1,27 @@
 // UI contract fixtures only; no real predictions, measurements or network calls.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { recordLabels, progressionLabel, observationTime, retryId } from '../src/recordState.ts';
+import { homeHealthSummary, recordLabels, progressionLabel, observationTime, retryId } from '../src/recordState.ts';
+
+test('home requires multiple observations before discussing comparison', () => {
+  for (const records of [undefined, [], [{ severity: null }], [{ severity: 0 }]]) {
+    assert.equal(homeHealthSummary(records), 'Insufficient data');
+  }
+});
+test('home reports unmeasured severity only when all observations lack severity', () => {
+  assert.equal(homeHealthSummary([{ severity: null }, { severity: null }]),
+    'Progression unavailable because severity was not measured.');
+});
+test('home acknowledges zero, mixed and synthetic stored severity without inferring progression', () => {
+  for (const records of [
+    [{ severity: null }, { severity: 0 }],
+    [{ severity: 0 }, { severity: 25 }],
+    [{ severity: 20, is_mock: true }, { severity: 30, is_mock: true }],
+  ]) {
+    assert.equal(homeHealthSummary(records),
+      'Stored severity values are available. Open the health dashboard for comparison availability.');
+  }
+});
 
 test('record-only labels never invent diagnosis, confidence or severity', () => {
   const labels = recordLabels({ analysis_status: 'not_requested', disease: null, severity: null, confidence: null, is_mock: false });

@@ -1,5 +1,14 @@
 import type { Observation, Progression } from './api';
 
+export function homeHealthSummary(records: ReadonlyArray<Pick<Observation, 'severity'>> | undefined) {
+  if (!records || records.length < 2) return 'Insufficient data';
+  if (records.every(record => record.severity === null)) {
+    return 'Progression unavailable because severity was not measured.';
+  }
+  // Stored values (including zero and synthetic values) do not establish comparability.
+  return 'Stored severity values are available. Open the health dashboard for comparison availability.';
+}
+
 export function recordLabels(record: Pick<Observation, 'disease' | 'severity' | 'confidence' | 'is_mock' | 'analysis_status'>) {
   const unanalysed = record.analysis_status === 'not_requested';
   return {
