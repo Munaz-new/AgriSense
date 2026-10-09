@@ -6,8 +6,8 @@ import { Title,Button } from '../components/UI';
 import { Icon } from '../components/Icon';
 const sections=[
   ['About AgriSense','A growing record of your plants','AgriSense is a plant observation journal. Give each physical plant its own profile, save photos and field context, and revisit its history.'],
-  ['How AgriSense works','From first photo to plant history','1. Add or select your plant.\n2. Capture or choose a photo.\n3. Validate the image and enter field context.\n4. Save an observation without analysis.\n5. Revisit the same plant over time.'],
-  ['Project information','The current stage of the project','Phase 5 supports model-independent plant records. AI disease analysis will become available after the validated Hybrid CNN-Transformer model is connected. Severity and health progression need validated measurements and a comparison policy.'],
+  ['How AgriSense works','From first photo to plant history','1. Add or select your plant.\n2. Capture or choose a photo.\n3. Validate the image and enter field context.\n4. Save without analysis, or analyze a tomato leaf when the model is available.\n5. Revisit the same plant over time.'],
+  ['Project information','The current stage of the project','AgriSense supports plant records and tomato-leaf analysis when the model and plant suitability screening are available. Screening and disease predictions can be wrong. Severity and health progression remain unavailable.'],
   ['Help','Photos, records and retries','Use a well-lit JPEG, PNG or WebP photo. File validation does not verify plant content. If a save times out, check history and retry the same save. Exact-image reuse is flagged and is not new progression evidence. Camera access needs permission; you can also select a photo.'],
   ['Settings','Connection and storage','Records are stored by your connected AgriSense service. Unsaved photo drafts live only in this app session. There are no cloud accounts or notifications to configure.'],
 ];

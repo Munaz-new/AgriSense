@@ -1,11 +1,12 @@
 from io import BytesIO
+from uuid import uuid4
 
 from fastapi.testclient import TestClient
 from PIL import Image
 import pytest
 
 from app.main import MAX_IMAGE_BYTES, create_app
-from app.prediction import Prediction
+from app.prediction import Prediction, MockPredictor
 
 
 @pytest.fixture
@@ -17,12 +18,12 @@ def image():
 
 @pytest.fixture
 def client(tmp_path):
-    with TestClient(create_app(tmp_path / 'test.db', tmp_path / 'uploads')) as client:
+    with TestClient(create_app(tmp_path / 'test.db', tmp_path / 'uploads', MockPredictor())) as client:
         yield client
 
 
 def plant(client, name='Tomato'):
-    response = client.post('/plants', json={'name': name})
+    response = client.post('/plants', json={'name': name, 'crop_name': 'tomato'})
     assert response.status_code == 201
     return response.json()['id']
 
@@ -30,7 +31,7 @@ def plant(client, name='Tomato'):
 def scan(client, plant_id, image, **context):
     return client.post(f'/plants/{plant_id}/observations',
                        files={'image': ('leaf.png', image, 'image/png')},
-                       data={'temperature': '27', 'humidity': '65', 'soil_type': 'Loamy',
+                       data={'request_id': str(uuid4()), 'temperature': '27', 'humidity': '65', 'soil_type': 'Loamy',
                              'soil_condition': 'Normal', **context})
 
 

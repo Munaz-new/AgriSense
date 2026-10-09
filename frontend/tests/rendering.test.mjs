@@ -1,0 +1,75 @@
+// Render actual UI components with DOM equivalents for React Native primitives.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { runInNewContext } from 'node:vm';
+import { resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import React from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import ts from 'typescript';
+import * as recordState from '../src/recordState.ts';
+import * as guidance from '../src/treatmentGuidance.ts';
+const root = fileURLToPath(new URL('../src/', import.meta.url));
+const primitive = ({ children }) => React.createElement('div', null, children);
+function load(path) {
+  const source = readFileSync(path, 'utf8');
+  const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.React, esModuleInterop: true } }).outputText;
+  const exports = {};
+  runInNewContext(compiled, { exports, require(name) {
+    if (name === 'react') return React;
+    if (name === 'react-native') return { Text: primitive, View: primitive, ScrollView: primitive, Pressable: primitive, Image: ({ source }) => React.createElement('img', { src: source.uri }), Linking: {} };
+    if (name.endsWith('/theme')) return { s: {} };
+    if (name.endsWith('/api')) return { API_URL: 'http://test-only' };
+    if (name.endsWith('/recordState')) return recordState;
+    if (name.endsWith('/treatmentGuidance')) return guidance;
+    if (name.endsWith('/Icon')) return { Icon: () => null };
+    if (name.endsWith('/UI')) return { Badge: primitive, Empty: primitive, Title: primitive, Field: primitive, date: value => value,
+      Button: ({ title, disabled }) => React.createElement('button', { disabled }, title) };
+    return load(resolve(dirname(path), name + '.tsx'));
+  } });
+  return exports;
+}
+const { ObservationCard } = load(resolve(root, 'components/ObservationCard.tsx'));
+const real = { id: 'render-test', plant_id: 'p', image_path: '/test.png', created_at: '2026-01-01', observed_at: '2026-01-01', observed_timezone: 'Asia/Kolkata (UTC+05:30)', disease: 'Early_blight', confidence: 72.5, severity: null, is_mock: false, analysis_status: 'completed', temperature: null, humidity: null, soil_type: null, soil_condition: null };
+
+test('saved result/history card renders prediction, uncertainty, sourced guidance and missing environment', () => {
+  const html = renderToStaticMarkup(React.createElement(ObservationCard, { observation: real }));
+  for (const text of ['Early_blight', 'uncalibrated', 'not guaranteed accuracy', 'Treatment and management guidance', 'UMN Extension', 'Temperature not recorded', 'Humidity not recorded', 'Asia/Kolkata']) assert.ok(html.includes(text), text);
+});
+
+test('record-only and historical mock cards do not render treatment guidance', () => {
+  for (const patch of [{ is_mock: true }, { analysis_status: 'not_requested', disease: null }]) {
+    const html = renderToStaticMarkup(React.createElement(ObservationCard, { observation: { ...real, ...patch } }));
+    assert.ok(!html.includes('Treatment and management guidance'));
+  }
+});
+
+test('Home reports current backend availability rather than hardcoded future availability', () => {
+  const { HomeScreen } = load(resolve(root, 'screens/HomeScreen.tsx'));
+  const j = { records: {}, plants: [], selected: null, health: { analysis_message: 'Tomato classification available.', capabilities: { record_only: true } } };
+  const html = renderToStaticMarkup(React.createElement(HomeScreen, { j }));
+  assert.ok(html.includes('Tomato classification available.'));
+  assert.ok(!html.includes('will become available'));
+});
+
+test('Scan renders the current preview and distinct file, suitability and disease stages', () => {
+  const { ScanScreen } = load(resolve(root, 'screens/ScanScreen.tsx'));
+  const base = { plants: [{ id: 'p', crop_name: 'tomato' }], selected: { id: 'p', crop_name: 'tomato' },
+    health: { capabilities: { tomato_analysis: true } }, image: { uri: 'current-logo.png', fileName: 'current-logo.png' }, imageRevision: 2,
+    validation: { is_valid: true, message: 'File checks only' }, analysisBlockers: [], recordBlockers: [], observedAt: '2026-01-01' };
+  for (const [status, label] of [['not_checked','Plant suitability not checked'], ['accepted','Plant suitability accepted'],
+    ['rejected','Image rejected — non-plant content'], ['inconclusive','Image rejected for analysis — plant content uncertain'],
+    ['unavailable','Plant suitability unavailable']]) {
+    const html = renderToStaticMarkup(React.createElement(ScanScreen, { j: { ...base, suitability: { status, message: 'Screening detail' } } }));
+    assert.ok(html.includes('src="current-logo.png"'));
+    assert.ok(html.includes('File validation passed'));
+    assert.ok(html.includes(label), label);
+    assert.ok(html.includes('Disease analysis has not completed'));
+    assert.ok(!html.includes('Disease analysis completed'));
+  }
+  const completed = renderToStaticMarkup(React.createElement(ObservationCard, { observation: real }));
+  assert.ok(completed.includes('Disease analysis completed'));
+  const record = renderToStaticMarkup(React.createElement(ObservationCard, { observation: { ...real, analysis_status: 'not_requested' } }));
+  assert.ok(!record.includes('Disease analysis completed'));
+});

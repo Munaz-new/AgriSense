@@ -63,3 +63,31 @@ test('observation time remains unknown or explicitly timezone-qualified', () => 
   assert.throws(() => observationTime('invalid'));
   assert.throws(() => observationTime('2025-02-30T00:00:00Z'));
 });
+
+test('real predictions label uncalibrated score and unavailable severity', () => {
+  const labels = recordLabels({ analysis_status: 'completed', disease: 'Early_blight', confidence: 72.5, severity: null, is_mock: false });
+  assert.equal(labels.disease, 'Early_blight');
+  assert.equal(labels.confidence, '72.5% prediction score (uncalibrated)');
+  assert.equal(labels.severity, 'Severity not measured');
+  assert.match(labels.notice, /screening does not establish tomato identity/);
+});
+
+test('automatic observation timestamp captures local timezone and offset', async () => {
+  const { captureObservation } = await import('../src/recordState.ts');
+  const date = new Date('2025-01-01T06:30:00Z');
+  date.getTimezoneOffset = () => -330;
+  const captured = captureObservation(date);
+  assert.equal(captured.observedAt, '2025-01-01T06:30:00.000Z');
+  assert.match(captured.observedTimezone, /UTC\+05:30/);
+});
+
+test('button gates preserve crop, image, readiness, context and retry safety', async () => {
+  const { scanBlockers, isTomato } = await import('../src/recordState.ts');
+  const valid = { busy: false, selected: { crop_name: ' Tomato ' }, image: {}, validation: { is_valid: true }, suitability: { status: 'accepted' }, health: { capabilities: { tomato_analysis: true, record_only: true } }, pendingAnalysis: null, temperature: '25', humidity: '60', soilType: 'Loamy', condition: 'Wet' };
+  assert.deepEqual(scanBlockers(valid, true), []);
+  assert.equal(isTomato({ name: 'Tomato', crop_name: null }), false);
+  for (const patch of [{ suitability: { status: 'not_checked' } }, { suitability: { status: 'rejected' } }, { suitability: { status: 'inconclusive' } }, { suitability: { status: 'unavailable' } }, { busy: true }, { selected: null }, { selected: { crop_name: 'potato' } }, { image: null }, { validation: null }, { validation: { is_valid: false } }, { health: null }, { health: { capabilities: { tomato_analysis: false, record_only: true } } }, { pendingAnalysis: false }, { temperature: 'invalid' }, { humidity: '101' }, { soilType: 'x'.repeat(101) }, { condition: 'unknown' }]) {
+    assert.ok(scanBlockers({ ...valid, ...patch }, true).length, JSON.stringify(patch));
+  }
+  assert.deepEqual(scanBlockers({ ...valid, selected: { crop_name: 'potato' }, health: { capabilities: { tomato_analysis: false, record_only: true } } }, false), []);
+});

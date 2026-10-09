@@ -1,4 +1,4 @@
-"""Technical checks only. Plant/leaf recognition requires a future trained model."""
+"""Technical file checks. Semantic plant-content suitability is a separate step."""
 from io import BytesIO
 from typing import Protocol
 import warnings
@@ -28,11 +28,7 @@ def rejected(reason: str, message: str) -> ValidationResult:
 
 
 class TechnicalPlantImageValidator:
-    """No semantic recognition, color heuristic, or disease prediction occurs here.
-
-    A future validator can compose these checks with a trained suitability model
-    and return the same result shape. Never skip the technical checks.
-    """
+    """Check that bytes decode as a supported, bounded still image only."""
     def validate(self, image: bytes) -> ValidationResult:
         if not image:
             return rejected("empty_upload", "The image is empty. Please select a clear plant or leaf photo.")
@@ -61,7 +57,7 @@ class TechnicalPlantImageValidator:
             return rejected("invalid_image", "This file cannot be read as a valid image. Please upload an undamaged JPEG, PNG, or WebP plant or leaf photo.")
         return ValidationResult(
             is_valid=True, reason="technical_checks_passed",
-            message="Technical image checks passed. Plant or leaf content has not been verified; plant recognition is not implemented yet.",
+            message="Technical image checks passed. This does not confirm that the image contains a plant or leaf.",
         )
 
 

@@ -2,7 +2,7 @@ import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 3
 LEGACY_COLUMNS = ('id', 'plant_id', 'image_path', 'created_at', 'disease', 'severity',
                   'confidence', 'predictor', 'is_mock', 'temperature', 'humidity',
                   'soil_type', 'soil_condition')
@@ -24,11 +24,32 @@ def initialize(path: Path):
     """Transactional migration of pre-Phase-5 databases; never infer old metadata."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with connect(path) as db:
+        # Table rebuild preserves rows and self-references; verify before committing.
+        db.execute('PRAGMA foreign_keys = OFF')
         db.execute('BEGIN IMMEDIATE')
         version = db.execute('PRAGMA user_version').fetchone()[0]
         if version > SCHEMA_VERSION:
             raise RuntimeError('Database schema is newer than this application.')
         if version == SCHEMA_VERSION:
+            return
+        if version == 1:
+            db.execute('ALTER TABLE observations ADD COLUMN observed_timezone TEXT')
+            version = 2
+        if version == 2:
+            schema = db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='observations'").fetchone()[0]
+            indexes = [r[0] for r in db.execute("SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name='observations' AND sql IS NOT NULL")]
+            definition = schema.split('(', 1)[1]
+            for field, kind in [('temperature', 'REAL'), ('humidity', 'REAL'), ('soil_type', 'TEXT'), ('soil_condition', 'TEXT')]:
+                definition = definition.replace(f'{field} {kind} NOT NULL', f'{field} {kind}')
+            db.execute('CREATE TABLE observations_v3 (' + definition)
+            db.execute('INSERT INTO observations_v3 SELECT * FROM observations')
+            db.execute('DROP TABLE observations')
+            db.execute('ALTER TABLE observations_v3 RENAME TO observations')
+            for sql in indexes:
+                db.execute(sql)
+            if db.execute('PRAGMA foreign_key_check').fetchall():
+                raise RuntimeError('Observation migration violates foreign keys.')
+            db.execute(f'PRAGMA user_version = {SCHEMA_VERSION}')
             return
         db.execute('''CREATE TABLE IF NOT EXISTS plants (
             id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at TEXT NOT NULL)''')
@@ -44,9 +65,9 @@ def initialize(path: Path):
             disease TEXT, severity REAL CHECK(severity BETWEEN 0 AND 100),
             confidence REAL CHECK(confidence BETWEEN 0 AND 100), predictor TEXT,
             is_mock INTEGER NOT NULL CHECK(is_mock IN (0, 1)),
-            temperature REAL NOT NULL, humidity REAL NOT NULL,
-            soil_type TEXT NOT NULL, soil_condition TEXT NOT NULL,
-            observed_at TEXT, tracking_ref TEXT, notes TEXT,
+            temperature REAL, humidity REAL,
+            soil_type TEXT, soil_condition TEXT,
+            observed_at TEXT, observed_timezone TEXT, tracking_ref TEXT, notes TEXT,
             image_sha256 TEXT, request_id TEXT, request_fingerprint TEXT,
             analysis_status TEXT NOT NULL DEFAULT 'legacy_unknown'
                 CHECK(analysis_status IN ('not_requested', 'completed', 'legacy_unknown')),

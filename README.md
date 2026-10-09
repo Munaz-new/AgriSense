@@ -1,35 +1,63 @@
-# AgriSense — Phase 5: model-independent plant records
+# AgriSense — controlled tomato-model integration
 
-A student mini-project using Expo + React Native + TypeScript, FastAPI, and SQLite.
+Expo + React Native + TypeScript, FastAPI, and SQLite. The app supports both
+record-only plant journaling and explicit tomato-leaf analysis using the evaluated
+Hybrid CNN–Transformer checkpoint. Historical mock observations remain labeled
+synthetic; the default prediction path never falls back to mock results.
 
-**The current frontend saves observations without model analysis. No trained model
-is active.** Photos, supplied environmental context, optional observation times,
-leaf/site references and notes can be recorded without generating disease,
-confidence or severity values. See [Phase 5 readiness](PHASE5_READINESS.md).
+## Real tomato model
 
-The legacy prediction API still uses the explicitly labelled development mock by
-default, for compatibility and development tests. The Phase 5 frontend does not
-call it. Historical mock records remain labelled synthetic and cannot establish
-real health progression. A trained classifier alone will not provide severity.
+The default artifact is `model/checkpoints/tomato_gpu_epoch5_retry2/best.pt`.
+Its held-out TEST evaluation covered 3,719 images: accuracy 82.3071%, macro F1
+0.819249, cross-entropy loss 0.553904. These are curated-dataset results, not field
+validation. Model scores are uncalibrated. Severity and health progression remain
+unavailable. The classifier does not verify that an image depicts a tomato leaf;
+other plants and unrelated images can receive a tomato label.
 
-Phase 3B materialized the validated manifest and ran a disposable CPU sanity batch;
-no full training or trained checkpoint was produced. The Phase 3B/3C/4A preparation
-code and reports remain preserved.
+The model loads once per application process during FastAPI startup, on CPU,
+using the existing guarded loader and checkpoint preprocessing. Requests reuse
+that model in evaluation/inference mode. Inference is serialized in worker
+threads, outside the async event loop. Run one server worker for this first local
+integration. A missing/incompatible checkpoint or missing model dependency leaves
+analysis unavailable while record-only journaling remains usable. Restart the
+server after fixing a startup failure; loading is not retried on each scan.
 
-Phase 3C adds inference-output checks and safe API failure handling for a future
-trained checkpoint. **Real inference is unavailable until a trained, evaluated
-checkpoint is supplied and explicitly integrated.** No model has been activated.
-See the [Phase 3C readiness report](model/PHASE3C_READINESS.md) for the verified
-class mapping, preprocessing, mock flow, tests, and remaining plant-recognition gap.
+Preprocessing is EXIF transpose, RGB conversion, direct bilinear resize to
+224 × 224, float32 pixels divided by 255, CHW layout, and ImageNet normalization
+(mean 0.485/0.456/0.406; standard deviation 0.229/0.224/0.225). No augmentation
+or cropping is added. The checkpoint's ordered 11-class mapping is authoritative.
 
-Phase 4A prepares reproducible training, best/last checkpoints, completed-epoch
-resume, and a Windows configuration example. **Real training has not started.**
-The [Phase 4A report and Windows steps](model/PHASE4A_READINESS.md) document the
-read-only preflight command, future training command, and outstanding machine checks.
+`GET /health` exposes `capabilities.tomato_analysis` and
+`capabilities.plant_content_screening`; readiness does not establish field accuracy. Choose a plant whose
+crop is `tomato` and use **Analyze tomato leaf and save**, or use **Save observation
+without analysis** for any crop. A plant's declared crop is not image recognition.
+
+Analysis submits multipart `image`, `request_id`, optional temperature, humidity,
+soil type, soil condition and observation time/timezone/reference/notes to
+`POST /plants/{plant_id}/observations`. The server validates the image, predicts,
+and saves one observation and uploaded photo. Exact request retries return the
+same observation (HTTP 200); new saves return HTTP 201. Changed content under an
+existing request ID returns HTTP 409. Inference failures return HTTP 503 without
+saving. Record-only requests continue to use `/plants/{plant_id}/records`.
+`POST /predict` remains a tomato-only, prediction-only endpoint with no persistence.
+
+Real responses include canonical `disease`, `prediction_score` (0–100 uncalibrated
+softmax score), `severity: null`, `is_mock: false`, and predictor identity. Saved
+observations add `analysis_status: completed`, image hash and checkpoint SHA-256.
+The legacy `confidence` response/database column retains the same score for
+compatibility; it does not mean calibrated confidence. Severity provenance stays
+null. SQLite schema version 3 adds observation timezone and nullable environmental
+fields through migrations that preserve existing observations.
+
+The dataset stays outside the repository and is not required for serving.
+Checkpoints, manifests, reports, SQLite files and uploads stay Git-ignored.
+Earlier phase/readiness documents describe historical states and are not current
+model-availability instructions. No automatic retraining or test-set evaluation
+runs during application startup or requests.
 
 ## Flow
 
-Add/select a physical plant → capture/select photo → technical validation → enter environmental context and optional observation metadata → save without analysis → record / plant history / comparison availability.
+Add/select a physical plant → capture/select photo → technical validation → enter environmental context and optional observation metadata → save without analysis or explicitly analyze a tomato leaf → record / plant history / comparison availability.
 
 Environmental details are stored as context. They are **never passed to the predictor**. No hardware, sensors, sensor APIs, authentication, payments, containers, or cloud services are used.
 
@@ -43,9 +71,11 @@ Environmental details are stored as context. They are **never passed to the pred
 - Each dimension is at least 224 pixels and at most 8192 pixels; total area is at most 24 million pixels. These are explicit MVP input limits, not evidence of plant content or trained-model requirements.
 - Still images only; animated images and decompression-bomb images are rejected.
 
-**There is no plant-versus-non-plant classifier. A technically valid poster, screenshot, or unrelated photo can still pass technical validation. Record-only saving makes no semantic or disease claim; the legacy mock endpoint can still return synthetic results.** Validation does not assess plant content, blur, framing, crop identity, disease, or severity. There are no green-pixel heuristics or simulated recognition claims. The UI labels success as technical checks only and explains this limitation before saving.
+Technical file validation only confirms that the upload decodes as a supported, bounded still image. Tomato analysis then runs a separate local OpenCLIP ViT-B/32 zero-shot suitability check before the existing 11-class disease classifier. The verifier compares two image views against leaf/plant descriptions and unrelated-content descriptions. It accepts clear plant-content evidence, rejects clear unrelated content, and abstains when the comparison is ambiguous. This is not a plant detector with a measured accuracy, and its similarities are not probabilities. It can still miss difficult images or accept unrelated images; use clear close-up leaf photos. A rejected or inconclusive image is never assigned a disease label. Record-only saving remains available without semantic or disease claims.
 
-`PlantImageValidator.validate(image: bytes) -> ValidationResult` is the extension point for future semantic validation. A future implementation should compose the technical validator with a trained and evaluated plant/leaf suitability model. No such model is implemented in Phase 2A.
+The suitability weights must be available locally for analysis to be ready. By default the app reads the OpenAI ViT-B/32 weights from the local Hugging Face cache; `AGRISENSE_PLANT_VERIFIER_WEIGHTS` can point to a compatible local OpenCLIP state file. Startup does not download or substitute weights. Health reports plant-content screening readiness separately from technical validation and tomato checkpoint readiness. Treatment guidance remains separate from both image checks and classifier scores.
+
+`PlantImageValidator.validate(image: bytes) -> ValidationResult` remains the technical file-validation boundary. Suitability screening is a separate `PlantContentVerifier` step, so a technical pass never means that the image contains a leaf or that disease analysis succeeded. Scan shows file validation, suitability acceptance/rejection, and disease completion separately. Selecting another photo clears previous checks and results. Explicit image rejection unlocks replacement; ambiguous network/save failures retain the request identity for safe retries. Record-only saving still requires environmental fields and makes no semantic claim.
 
 Every prediction request and save request revalidates its own image bytes. Calling `/predict` or the observation endpoint directly cannot skip validation. A failed validation returns an API error before prediction, image storage, or observation insertion. The validation endpoint itself never predicts or persists anything.
 
@@ -62,11 +92,18 @@ and `/path/to/tomato-dataset` with your checkout and external dataset locations.
 
 ```bash
 cd /path/to/AgriSense
-python -m venv backend/.venv
-backend/.venv/bin/python -m pip install -r backend/requirements.txt
-cd backend
-.venv/bin/python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+# On this workstation model/.venv already contains the evaluated model runtime.
+# For a fresh checkout, create it first: python -m venv model/.venv
+model/.venv/bin/python -m pip install -r backend/requirements-inference.txt
+OMP_NUM_THREADS=4 model/.venv/bin/python -m uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --workers 1
 ```
+
+`AGRISENSE_CHECKPOINT_PATH` can override the artifact path; relative paths resolve
+from the repository root. The checkpoint must be provisioned locally, not committed.
+The lightweight `backend/.venv` lacks PyTorch/NumPy on this workstation: use the
+combined environment above for real serving. CPU inference also works with the
+installed CUDA-enabled PyTorch build. Requirements align NumPy/Pillow with the
+evaluated environment; a fresh machine must provision a compatible PyTorch wheel.
 
 Leave this terminal running. Visit:
 
@@ -111,10 +148,13 @@ For a browser accessed through a LAN hostname/IP instead of localhost, set `AGRI
 
 1. Add a unique plant name/identifier. Optionally supply its crop name; the app does
    not identify crops from photos or infer species from plant names.
-2. Choose **New observation**, select/capture a photo, and **Validate image**.
-3. Enter temperature, humidity, soil type and soil condition. Optionally enter a
-   timezone-qualified observation time, leaf/site reference and notes. Unknown
-   observation time stays null; save time is recorded separately.
+2. Choose **New observation**, select/capture a photo, and **Check file and plant suitability**.
+   Record-only saving requires file validation; suitability acceptance is required
+   only for **Analyze tomato leaf and save**, which checks suitability again.
+3. Enter temperature, humidity, soil type and soil condition for record-only saving;
+   these fields are optional for analysis. Photo selection captures observation
+   time/timezone automatically, separately from server save time. Leaf/site reference
+   and notes are optional. The API still accepts unknown observation time as null.
 4. Choose **Save observation without analysis**. No predictor is called. Disease,
    confidence and severity stay null, with explicit unavailable messages.
 5. History is newest first; the dashboard is chronological. Ordering uses supplied
@@ -136,7 +176,7 @@ older records with unknown image hashes are not retroactively matched.
 
 | Method | Endpoint | Input / behavior |
 | --- | --- | --- |
-| GET | `/health` | Legacy predictor mode plus record-only / validated-analysis / severity / progression capabilities |
+| GET | `/health` | Predictor readiness plus record-only / technical-validation / plant-screening / tomato-analysis / severity / progression capabilities |
 | POST | `/plants` | JSON `name` and optional `crop_name`; returns UUID and UTC save timestamp |
 | GET | `/plants` | Plants, newest first |
 | GET | `/plants/{plant_id}` | One plant, or 404 |
@@ -145,6 +185,7 @@ older records with unknown image hashes are not retroactively matched.
 | POST | `/plants/{plant_id}/records` | Validated record-only save; image, environmental fields and request ID required; no predictor call |
 | GET | `/plants/{plant_id}/progression` | Optional `tracking_ref`; explicit comparison availability and reason; no policy enabled |
 | POST | `/validate-image` | Multipart `image` only; technical validation, no prediction or persistence |
+| POST | `/check-plant-suitability` | Multipart `image`; technical checks then plant screening, no disease prediction or persistence. Analysis screens the bytes again. |
 | POST | `/predict` | Multipart `image` only; revalidate and preview prediction without saving an image or observation |
 
 `POST /records` also accepts optional `observed_at` (timezone required, not future),
@@ -172,7 +213,7 @@ Validation success returns HTTP 200 with `is_valid`, `reason`, and `message`:
 {
   "is_valid": true,
   "reason": "technical_checks_passed",
-  "message": "Technical image checks passed. Plant or leaf content has not been verified; plant recognition is not implemented yet."
+  "message": "Technical image checks passed. This does not confirm that the image contains a plant or leaf."
 }
 ```
 
@@ -188,7 +229,7 @@ Validation failures use the same shape inside FastAPI's `detail` field:
 }
 ```
 
-HTTP 413 means oversized file; 415 means unsupported format or unreadable/corrupted image; 422 covers empty uploads, unsuitable dimensions, animation, or a future semantic rejection. A missing multipart `image` field uses FastAPI's normal 422 request-validation error. The frontend displays the server's validation message and clears approval after a validation rejection.
+HTTP 413 means oversized file; 415 means unsupported format or unreadable/corrupted image; 422 covers empty uploads, unsuitable dimensions, animation, or semantic rejection during suitability checking or analysis. A missing multipart `image` field uses FastAPI's normal 422 request-validation error. The frontend displays the server's validation message and clears approval after a validation rejection.
 
 Legacy prediction fields (confidence and any estimated severity use **0–100**, not fractions; `severity` can now be `null` when unavailable):
 

@@ -1,7 +1,8 @@
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from hashlib import sha256
 import os
+import logging
+from threading import Lock
 from pathlib import Path
 from typing import Annotated, Literal
 from uuid import uuid4
@@ -9,14 +10,16 @@ from uuid import uuid4
 from fastapi import FastAPI, File, Form, HTTPException, Query, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, computed_field
+from starlette.concurrency import run_in_threadpool
 
-from .database import connect, initialize, insert_observation
+from .database import connect, initialize
 from .records import RequestConflict, save_record
 from .progression import progression
-from .prediction import MockPredictor, Prediction, PredictionUnavailableError, Predictor
+from .prediction import MockPredictor, Prediction, PredictionUnavailableError, Predictor, TrainedTomatoPredictor
 from .image_validation import (MAX_IMAGE_BYTES, PlantImageValidator, TechnicalPlantImageValidator,
                                ValidationResult, image_extension)
+from .plant_suitability import PlantContentVerifier, Suitability
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -44,6 +47,7 @@ class Observation(BaseModel):
     is_mock: bool
     analysis_status: Literal['not_requested', 'completed', 'legacy_unknown'] = 'legacy_unknown'
     observed_at: str | None = None
+    observed_timezone: str | None = None
     tracking_ref: str | None = None
     notes: str | None = None
     image_sha256: str | None = None
@@ -54,10 +58,16 @@ class Observation(BaseModel):
     severity_method: str | None = None
     severity_version: str | None = None
     severity_scale: str | None = None
-    temperature: float
-    humidity: float
-    soil_type: str
-    soil_condition: Literal["Dry", "Normal", "Wet"]
+    @computed_field
+    @property
+    def prediction_score(self) -> float | None:
+        """Uncalibrated softmax percentage for real analyses; no score for mock records."""
+        return self.confidence if not self.is_mock and self.analysis_status == 'completed' else None
+
+    temperature: float | None = None
+    humidity: float | None = None
+    soil_type: str | None = None
+    soil_condition: Literal["Dry", "Normal", "Wet"] | None = None
 
 
 def now() -> str:
@@ -73,16 +83,35 @@ async def read_image(upload: UploadFile) -> bytes:
 
 def create_app(database_path: Path | None = None, upload_dir: Path | None = None,
                predictor: Predictor | None = None,
-               validator: PlantImageValidator | None = None) -> FastAPI:
+               validator: PlantImageValidator | None = None,
+               checkpoint_path: Path | None = None,
+               plant_verifier: PlantContentVerifier | None = None) -> FastAPI:
     database_path = database_path or Path(os.getenv("AGRISENSE_DB_PATH", ROOT / "database/agrisense.db"))
     upload_dir = upload_dir or Path(os.getenv("AGRISENSE_UPLOAD_DIR", ROOT / "backend/uploads"))
-    predictor = predictor or MockPredictor()
+    configured_checkpoint = checkpoint_path or Path(os.getenv(
+        "AGRISENSE_CHECKPOINT_PATH", ROOT / "model/checkpoints/tomato_gpu_epoch5_retry2/best.pt"))
+    if not configured_checkpoint.is_absolute():
+        configured_checkpoint = ROOT / configured_checkpoint
+    inference_lock = Lock()
     validator = validator or TechnicalPlantImageValidator()
     upload_dir.mkdir(parents=True, exist_ok=True)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        nonlocal predictor, plant_verifier
         initialize(database_path)
+        if predictor is None:
+            try:
+                predictor = await run_in_threadpool(TrainedTomatoPredictor, configured_checkpoint)
+            except Exception:
+                logging.getLogger(__name__).exception("Tomato model unavailable at startup")
+        if plant_verifier is None and isinstance(predictor, TrainedTomatoPredictor):
+            try:
+                plant_verifier = await run_in_threadpool(PlantContentVerifier)
+            except Exception:
+                logging.getLogger(__name__).exception("Plant-content screening unavailable at startup")
+        app.state.predictor = predictor
+        app.state.plant_verifier = plant_verifier
         yield
 
     app = FastAPI(title="AgriSense Phase 5", lifespan=lifespan,
@@ -103,10 +132,19 @@ def create_app(database_path: Path | None = None, upload_dir: Path | None = None
 
     @app.get("/health")
     def health():
-        return {"status": "ok", "prediction_mode": "development-only mock" if isinstance(predictor, MockPredictor) else "custom predictor", "is_mock": isinstance(predictor, MockPredictor),
-                "capabilities": {"record_only": True, "validated_analysis": False,
+        ready = isinstance(predictor, TrainedTomatoPredictor)
+        screening_ready = plant_verifier is not None
+        return {"status": "ok", "prediction_mode": "real tomato model" if ready else "unavailable",
+                "is_mock": isinstance(predictor, MockPredictor),
+                "capabilities": {"record_only": True, "technical_image_validation": True,
+                                 "plant_content_screening": screening_ready,
+                                 "tomato_analysis": ready and screening_ready,
                                  "severity_measurement": False, "health_progression": False},
-                "analysis_message": "Validated disease analysis is not enabled. Observations can be saved without analysis."}
+                "analysis_message": ("Tomato classification available. Scores are uncalibrated; "
+                                     "plant content screening enabled; results remain uncertain. Severity is unavailable." if ready and screening_ready else
+                                     "Tomato analysis unavailable because the tomato model or plant-content screening is unavailable. You can still save without analysis." if ready else
+                                     "Tomato analysis unavailable. You can still save without analysis.")}
+
 
     @app.post("/plants", response_model=Plant, status_code=201)
     def add_plant(body: PlantInput):
@@ -145,9 +183,40 @@ def create_app(database_path: Path | None = None, upload_dir: Path | None = None
             raise HTTPException(status, detail=validation.model_dump())
         return data, validation
 
+    def check_suitability(data: bytes):
+        if plant_verifier is None:
+            raise PredictionUnavailableError('Plant-content screening is unavailable')
+        try:
+            suitability = plant_verifier.verify(data)
+        except Exception as error:
+            logging.getLogger(__name__).exception("Plant-content screening failed during request")
+            raise PredictionUnavailableError('Plant-content screening failed') from error
+        if suitability.outcome == Suitability.NON_PLANT:
+            raise HTTPException(422, detail={"code": "non_plant_image", "message": suitability.message})
+        if suitability.outcome != Suitability.PLANT:
+            raise HTTPException(422, detail={"code": "plant_content_uncertain", "message": suitability.message})
+        return {"outcome": "plant", "message": suitability.message}
+
+    @app.post('/check-plant-suitability')
+    async def check_plant_suitability(image: Annotated[UploadFile, File()]):
+        data, _ = await validated_image(image)
+        def check():
+            with inference_lock:
+                return check_suitability(data)
+        try:
+            return await run_in_threadpool(check)
+        except PredictionUnavailableError as error:
+            raise HTTPException(503, detail={"code": "plant_screening_unavailable", "message":
+                "Plant suitability screening is unavailable. No analysis or save was performed. Try again after refreshing model status."}) from error
+
     def predict_image(data: bytes) -> Prediction:
         try:
-            return predictor.predict(data)
+            with inference_lock:
+                if predictor is None:
+                    raise PredictionUnavailableError('Model not loaded')
+                if plant_verifier is not None or isinstance(predictor, TrainedTomatoPredictor):
+                    check_suitability(data)
+                return predictor.predict(data)
         except PredictionUnavailableError as error:
             # Do not leak model paths/errors, substitute a mock, or persist a failed scan.
             raise HTTPException(503, 'Prediction service unavailable. No observation was saved.') from error
@@ -160,7 +229,9 @@ def create_app(database_path: Path | None = None, upload_dir: Path | None = None
     @app.post("/predict", response_model=Prediction)
     async def predict(image: Annotated[UploadFile, File()]):
         data, _ = await validated_image(image)
-        return predict_image(data)
+        # Suitability is assessed separately from technical file validation and
+        # disease inference. Rejection/abstention never produces or saves a label.
+        return await run_in_threadpool(predict_image, data)
 
     @app.post('/plants/{plant_id}/records', response_model=Observation, status_code=201)
     async def add_record(
@@ -172,6 +243,7 @@ def create_app(database_path: Path | None = None, upload_dir: Path | None = None
         soil_type: Annotated[str, Form(min_length=1, max_length=100)],
         soil_condition: Annotated[Literal['Dry', 'Normal', 'Wet'], Form()],
         observed_at: Annotated[datetime | None, Form()] = None,
+        observed_timezone: Annotated[str | None, Form(max_length=100)] = None,
         tracking_ref: Annotated[str | None, Form(max_length=100)] = None,
         notes: Annotated[str | None, Form(max_length=2000)] = None,
     ):
@@ -181,15 +253,16 @@ def create_app(database_path: Path | None = None, upload_dir: Path | None = None
             raise HTTPException(422, 'Soil type cannot be blank.')
         if observed_at is not None and (observed_at.tzinfo is None or observed_at > datetime.now(timezone.utc)):
             raise HTTPException(422, 'Observation time must include a timezone and must not be in the future.')
-        fields = dict(request_id=request_id, temperature=temperature, humidity=humidity,
+        fields = dict(request_id=request_id, observed_timezone=observed_timezone, temperature=temperature, humidity=humidity,
                       soil_type=soil_type, soil_condition=soil_condition,
                       observed_at=observed_at.astimezone(timezone.utc).isoformat() if observed_at else None,
                       tracking_ref=tracking_ref.strip() or None if tracking_ref else None,
                       notes=notes.strip() or None if notes else None)
         data, _ = await validated_image(image)
         try:
-            saved, replay = save_record(database_path, upload_dir, plant_id, data,
-                                        image_extension(data), fields, now())
+            saved, replay = await run_in_threadpool(
+                save_record, database_path, upload_dir, plant_id, data,
+                image_extension(data), fields, now())
         except RequestConflict as error:
             raise HTTPException(409, str(error)) from error
         if replay:
@@ -198,37 +271,46 @@ def create_app(database_path: Path | None = None, upload_dir: Path | None = None
 
     @app.post("/plants/{plant_id}/observations", response_model=Observation, status_code=201)
     async def add_observation(
-        plant_id: str,
+        plant_id: str, response: Response,
         image: Annotated[UploadFile, File()],
-        temperature: Annotated[float, Form(ge=-50, le=70, allow_inf_nan=False)],
-        humidity: Annotated[float, Form(ge=0, le=100, allow_inf_nan=False)],
-        soil_type: Annotated[str, Form(min_length=1, max_length=100)],
-        soil_condition: Annotated[Literal["Dry", "Normal", "Wet"], Form()],
+        request_id: Annotated[str, Form(min_length=8, max_length=100, pattern=r'^[A-Za-z0-9_-]+$')],
+        temperature: Annotated[float | None, Form(ge=-50, le=70, allow_inf_nan=False)] = None,
+        humidity: Annotated[float | None, Form(ge=0, le=100, allow_inf_nan=False)] = None,
+        soil_type: Annotated[str | None, Form(min_length=1, max_length=100)] = None,
+        soil_condition: Annotated[Literal["Dry", "Normal", "Wet"] | None, Form()] = None,
+        observed_at: Annotated[datetime | None, Form()] = None,
+        observed_timezone: Annotated[str | None, Form(max_length=100)] = None,
+        tracking_ref: Annotated[str | None, Form(max_length=100)] = None,
+        notes: Annotated[str | None, Form(max_length=2000)] = None,
     ):
-        require_plant(plant_id)
-        soil_type = soil_type.strip()
-        if not soil_type:
+        plant = require_plant(plant_id)
+        if (plant['crop_name'] or '').strip().lower() != 'tomato':
+            raise HTTPException(422, 'Analysis supports tomato plants only. Set crop to tomato or save without analysis.')
+        soil_type = soil_type.strip() if soil_type is not None else None
+        if soil_type == "":
             raise HTTPException(422, "Soil type cannot be blank.")
+        if observed_at is not None and (observed_at.tzinfo is None or observed_at > datetime.now(timezone.utc)):
+            raise HTTPException(422, 'Observation time must include a timezone and must not be in the future.')
+        fields = dict(request_id=request_id, observed_timezone=observed_timezone, temperature=temperature, humidity=humidity,
+                      soil_type=soil_type, soil_condition=soil_condition,
+                      observed_at=observed_at.astimezone(timezone.utc).isoformat() if observed_at else None,
+                      tracking_ref=tracking_ref.strip() or None if tracking_ref else None,
+                      notes=notes.strip() or None if notes else None)
         data, _ = await validated_image(image)
-        extension = image_extension(data)
-        # Environmental context deliberately never crosses the predictor boundary.
-        result = predict_image(data)
-        observation_id = str(uuid4())
-        filename = f"{observation_id}.{extension}"
-        observation = dict(id=observation_id, plant_id=plant_id, image_path=f"/uploads/{filename}",
-                           created_at=now(), **result.model_dump(), temperature=temperature,
-                           humidity=humidity, soil_type=soil_type, soil_condition=soil_condition,
-                           analysis_status='completed', image_sha256=sha256(data).hexdigest(),
-                           checkpoint_id=getattr(predictor, 'checkpoint_id', None))
-        target = upload_dir / filename
+        # Only image bytes cross the predictor boundary. Persistence handles replay before inference.
+        def analysis():
+            result = predict_image(data)
+            return dict(**result.model_dump(exclude={'prediction_score'}),
+                        checkpoint_id=getattr(predictor, 'checkpoint_id', None))
         try:
-            target.write_bytes(data)
-            with connect(database_path) as db:
-                insert_observation(db, observation)
-        except Exception:
-            target.unlink(missing_ok=True)
-            raise
-        return observation
+            saved, replay = await run_in_threadpool(
+                save_record, database_path, upload_dir, plant_id, data,
+                image_extension(data), fields, now(), analysis)
+        except RequestConflict as error:
+            raise HTTPException(409, str(error)) from error
+        if replay:
+            response.status_code = 200
+        return saved
 
     return app
 

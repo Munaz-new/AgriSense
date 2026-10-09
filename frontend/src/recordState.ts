@@ -14,11 +14,11 @@ export function recordLabels(record: Pick<Observation, 'disease' | 'severity' | 
   return {
     disease: unanalysed || record.disease === null ? 'Disease not assessed' : record.disease,
     severity: unanalysed || record.severity === null ? 'Severity not measured' : `${record.severity}% ${record.is_mock ? 'synthetic demo severity' : 'recorded severity'}`,
-    confidence: unanalysed || record.confidence === null ? 'Confidence unavailable' : `${record.confidence}% ${record.is_mock ? 'synthetic confidence' : 'model confidence (uncalibrated)'}`,
+    confidence: unanalysed || record.confidence === null ? 'Confidence unavailable' : `${record.confidence}% ${record.is_mock ? 'synthetic confidence' : 'prediction score (uncalibrated)'}`,
     notice: record.is_mock ? 'DEVELOPMENT MOCK • Historical demo values, not a diagnosis.'
       : unanalysed ? 'Recorded without analysis. No disease or severity conclusion.'
       : record.analysis_status === 'legacy_unknown' ? 'Historical analysis • measurement provenance may be unavailable.'
-      : 'Stored analysis result • not a whole-plant health assessment.',
+      : 'Tomato model prediction • not a whole-plant health assessment. Plant screening does not establish tomato identity or diagnostic accuracy; screening provenance is unavailable for historical records. Scores are uncalibrated, not guaranteed accuracy. Even a high score or healthy label may be wrong. If symptoms disagree, seek local diagnostic advice.',
   };
 }
 
@@ -49,4 +49,39 @@ export function requestId() {
 
 export function retryId(pendingId: string | null, create = requestId) {
   return pendingId ?? create();
+}
+
+export function captureObservation(date = new Date()) {
+  const offset = -date.getTimezoneOffset();
+  const sign = offset >= 0 ? '+' : '-';
+  const zone = `${sign}${String(Math.floor(Math.abs(offset) / 60)).padStart(2, '0')}:${String(Math.abs(offset) % 60).padStart(2, '0')}`;
+  return { observedAt: date.toISOString(), observedTimezone: `${Intl.DateTimeFormat().resolvedOptions().timeZone || 'Local'} (UTC${zone})` };
+}
+
+export function isTomato(plant: { crop_name?: string | null } | null) {
+  return plant?.crop_name?.trim().toLowerCase() === 'tomato';
+}
+
+export function scanBlockers(state: {
+  busy: boolean; selected: { crop_name?: string | null } | null; image: unknown;
+  validation: { is_valid: boolean } | null;
+  suitability?: { status: string };
+  health: { capabilities: { tomato_analysis: boolean; record_only: boolean } } | null;
+  pendingAnalysis: boolean | null; temperature: string; humidity: string; soilType: string; condition: string;
+}, analyze: boolean): string[] {
+  const reasons: string[] = [];
+  if (state.busy) reasons.push('Please wait for the current operation.');
+  if (state.pendingAnalysis !== null && state.pendingAnalysis !== analyze) reasons.push('Retry the same action or discard the draft after checking history.');
+  if (!state.selected) reasons.push('Select a plant first.');
+  if (analyze && !isTomato(state.selected)) reasons.push('Select or create a plant with crop set to tomato.');
+  if (!state.health) reasons.push('Backend availability is unknown. Refresh connection status.');
+  else if (analyze ? !state.health.capabilities.tomato_analysis : !state.health.capabilities.record_only) reasons.push(analyze ? 'Real tomato model unavailable. You can save without analysis.' : 'Record saving is unavailable.');
+  if (!state.image) reasons.push('Select a real photo.');
+  else if (!state.validation?.is_valid) reasons.push('Validate the selected image successfully.');
+  if (analyze && state.suitability?.status !== 'accepted') reasons.push('Plant suitability must be accepted before disease analysis. Check the selected photo.');
+  if ((!analyze || state.temperature.trim()) && ( !Number.isFinite(Number(state.temperature)) || Number(state.temperature) < -50 || Number(state.temperature) > 70 || !state.temperature.trim())) reasons.push('Enter measured temperature between -50 and 70°C.');
+  if ((!analyze || state.humidity.trim()) && ( !Number.isFinite(Number(state.humidity)) || Number(state.humidity) < 0 || Number(state.humidity) > 100 || !state.humidity.trim())) reasons.push('Enter measured humidity between 0 and 100%.');
+  if ((!analyze && !state.soilType.trim()) || state.soilType.trim().length > 100) reasons.push('Enter soil type (up to 100 characters).');
+  if ((!analyze || state.condition) && !['Dry', 'Normal', 'Wet'].includes(state.condition)) reasons.push('Select the observed soil condition.');
+  return reasons;
 }

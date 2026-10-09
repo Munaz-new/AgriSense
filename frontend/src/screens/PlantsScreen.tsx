@@ -6,7 +6,7 @@ import { s } from '../theme';
 import { Button,Badge,Field,Title,date } from '../components/UI';
 import { Icon } from '../components/Icon';
 export function PlantsScreen({ j }: { j: Journal; }) {
-  const [adding,setAdding]=useState(!j.plants.length);
+  const [adding,setAdding]=useState(!j.plants.length||!!j.cropName);
   return <>
     <Title title="My Plants" subtitle="One profile for each physical plant." />
     <Button title={adding? 'Close plant form':'Add Plant'} icon="plus" disabled={j.locked} onPress={() => setAdding(!adding)} />
@@ -14,6 +14,8 @@ export function PlantsScreen({ j }: { j: Journal; }) {
       <Text style={s.heading}>Meet your next plant</Text>
       <Field label="Plant name / identifier" value={j.name} setValue={j.setName} disabled={j.locked} />
       <Field label="Crop name (optional, user identified)" value={j.cropName} setValue={j.setCropName} disabled={j.locked} />
+      <Button title="Set crop to tomato" secondary disabled={j.locked} onPress={() => j.setCropName('tomato')} />
+      <Text style={s.muted}>Tomato analysis uses the crop field, not the plant name.</Text>
       <Button title="Save plant" disabled={j.locked||!j.name.trim()} onPress={() => void j.addPlant()} />
     </View>}
     {j.plants.map(plant => {

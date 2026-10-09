@@ -1,15 +1,21 @@
-"""Image-only boundary: replace MockPredictor with the trained model later."""
+"""Image-only trained predictor; mock retained solely for explicit test injection."""
 from hashlib import file_digest, sha256
 from typing import Protocol
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 
 class Prediction(BaseModel):
     disease: str
     severity: float | None = Field(default=None, ge=0, le=100)
-    confidence: float = Field(ge=0, le=100)
+    confidence: float = Field(ge=0, le=100, description="Legacy field: uncalibrated softmax percentage for real predictions.")
     predictor: str
     is_mock: bool
+
+    @computed_field
+    @property
+    def prediction_score(self) -> float | None:
+        """Uncalibrated softmax percentage, not a calibrated probability of correctness."""
+        return None if self.is_mock else self.confidence
 
 
 class Predictor(Protocol):
@@ -32,17 +38,17 @@ class MockPredictor:
 
 
 class TrainedTomatoPredictor:
-    """Explicit opt-in adapter for a future evaluated checkpoint. Never auto-enabled.
+    """Adapter for the evaluated tomato checkpoint; constructed once at application startup.
 
     Install model dependencies in the backend environment before using this class.
-    Missing/untrained checkpoints raise; the default app still uses MockPredictor.
+    Missing/untrained checkpoints raise; failures never substitute mock predictions.
     This classifier does not verify plant content and supports TOMATO classes only.
     """
     def __init__(self, checkpoint):
         from pathlib import Path
         checkpoint = Path(checkpoint)
         if not checkpoint.is_file():
-            raise FileNotFoundError('No trained tomato checkpoint; keep using the development mock.')
+            raise FileNotFoundError('No trained tomato checkpoint; tomato analysis is unavailable.')
         # Backend can be launched from backend/ without installing model as a package.
         import sys
         repository = str(Path(__file__).resolve().parents[2])

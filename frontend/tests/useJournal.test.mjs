@@ -5,11 +5,21 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
+import * as recordState from '../src/recordState.ts';
 
-function journalHarness(api) {
+class PlantSuitabilityError extends Error {
+  constructor(code, message) { super(message); this.code = code; }
+}
+function journalHarness(api, picker = {}) {
+  api = { checkSuitability: async () => ({ outcome: 'plant', message: 'Leaf content supported' }), ...api };
   const state = [];
   let cursor = 0;
   const react = {
+    useRef(initial) {
+      const index = cursor++;
+      if (index === state.length) state.push({ current: initial });
+      return state[index];
+    },
     useEffect() {}, // Explicitly refresh below instead of scheduling mount effects.
     useState(initial) {
       const index = cursor++;
@@ -28,8 +38,9 @@ function journalHarness(api) {
     exports, Error,
     require(name) {
       if (name === 'react') return react;
-      if (name === '../api') return { api, ImageValidationError: class extends Error {} };
-      if (name === 'expo-image-picker' || name === '../recordState') return {};
+      if (name === '../api') return { api, PlantSuitabilityError, ImageValidationError: class extends Error {} };
+      if (name === '../recordState') return recordState;
+      if (name === 'expo-image-picker') return { launchImageLibraryAsync: async () => ({ canceled: false, assets: [{ uri: 'test-image' }] }), ...picker };
       throw new Error(`Unexpected import: ${name}`);
     },
   });
@@ -73,3 +84,191 @@ for (const failurePoint of ['health', 'plants', 'observations']) {
     assert.equal(render().busy, false);
   });
 }
+
+
+test('analysis retries preserve request ID and mode; record-only remains separate', async () => {
+  const calls = [];
+  let fail = true;
+  const plant = { id: 'tomato-a', crop_name: 'tomato' };
+  const render = journalHarness({
+    health: async () => ({ capabilities: { record_only: true, tomato_analysis: true } }),
+    plants: async () => [plant], observations: async () => [],
+    validateImage: async () => ({ is_valid: true }),
+    scan: async (...args) => {
+      calls.push(args);
+      if (fail) throw new Error('timeout');
+      return { id: 'saved', plant_id: plant.id, created_at: '2025-01-01', severity: null };
+    },
+    record: async () => { throw new Error('wrong save path'); },
+  });
+  await render().refresh();
+  await render().pick(false);
+  await render().validateImage();
+  render().setTemperature('25'); render().setHumidity('60'); render().setSoilType('Loamy'); render().setCondition('Normal');
+  await render().saveRecord(true);
+  const pending = render().pendingId;
+  assert.ok(pending);
+  assert.equal(render().pendingAnalysis, true);
+  await render().saveRecord(false);
+  assert.match(render().error, /Retry the same action/);
+  assert.equal(calls.length, 1);
+  fail = false;
+  await render().saveRecord(true);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0][3].request_id, pending);
+  assert.equal(calls[1][3].request_id, pending);
+  assert.equal(render().pendingId, null);
+  assert.equal(render().pendingAnalysis, null);
+  assert.equal(render().screen, 'result');
+});
+
+test('photo capture, crop selection, validation, automatic details and saved history', async () => {
+  const tomato = { id: 'tomato', crop_name: ' Tomato ' };
+  const other = { id: 'other', name: 'Tomato', crop_name: null };
+  let valid = false;
+  let saved;
+  const render = journalHarness({
+    health: async () => ({ capabilities: { tomato_analysis: true, record_only: true } }),
+    plants: async () => [other, tomato], observations: async () => saved ? [saved] : [],
+    progression: async () => ({ status: 'unavailable' }),
+    validateImage: async () => ({ is_valid: valid, message: 'test validation' }),
+    scan: async (id, image, env, details) => {
+      assert.equal(id, tomato.id);
+      assert.equal(details.tracking_ref, null);
+      assert.equal(details.notes, 'User note');
+      assert.ok(details.observed_at && details.observed_timezone);
+      saved = { ...details, id: 'saved', plant_id: id, created_at: new Date().toISOString() };
+      return saved;
+    },
+  });
+  await render().refresh();
+  assert.ok(render().analysisBlockers.some(r => /crop set to tomato/.test(r)));
+  await render().pick(false);
+  assert.ok(render().observedAt && render().observedTimezone);
+  assert.equal(render().condition, '');
+  await render().validateImage();
+  assert.equal(render().validation.is_valid, false);
+  render().selectPlant(tomato);
+  assert.equal(render().image, null);
+  assert.equal(render().validation, null);
+  await render().pick(false);
+  const timestamp = render().observedAt;
+  valid = true;
+  await render().validateImage();
+  render().setTemperature('25'); render().setHumidity('60'); render().setSoilType('Loam'); render().setCondition('Dry'); render().setNotes('User note');
+  assert.equal(render().analysisBlockers.length, 0);
+  await render().saveRecord(true);
+  assert.equal(saved.observed_at, timestamp);
+  assert.equal(render().records.tomato[0].id, 'saved');
+  await render().openHistory('history');
+  assert.equal(render().observations[0].id, 'saved');
+  await render().pick(false);
+  assert.equal(render().validation, null);
+});
+
+test('explicit tomato creation selects persisted crop and image analysis needs no environment', async () => {
+  let fields;
+  const render = journalHarness({
+    health: async () => ({ capabilities: { tomato_analysis: true, record_only: true } }),
+    plants: async () => [], observations: async () => [],
+    addPlant: async (name, crop) => {
+      assert.equal(crop, 'tomato');
+      return { id: 'new', name, crop_name: crop };
+    },
+    validateImage: async () => ({ is_valid: true, reason: 'technical_checks_passed' }),
+    scan: async (id, image, env, details) => {
+      fields = env;
+      return { id: 'saved', plant_id: id, ...details, created_at: new Date().toISOString() };
+    },
+  });
+  await render().refresh();
+  render().setName('Tomato'); render().setCropName('tomato');
+  await render().addPlant();
+  assert.equal(render().selected.crop_name, 'tomato');
+  await render().pick(false); await render().validateImage();
+  assert.equal(render().result, null); // Validation never diagnoses healthy or diseased.
+  assert.equal(render().analysisBlockers.length, 0);
+  assert.ok(render().recordBlockers.length);
+  await render().saveRecord(true);
+  assert.deepEqual({ ...fields }, { temperature: null, humidity: null, soil_type: null, soil_condition: null });
+});
+
+function scanApi(extra = {}) {
+  return { health: async () => ({ capabilities: { tomato_analysis: true, record_only: true, plant_content_screening: true } }),
+    plants: async () => [{ id: 'p', crop_name: 'tomato' }], observations: async () => [],
+    validateImage: async () => ({ is_valid: true, message: 'Technical checks passed' }),
+    scan: async () => ({ id: 'saved', created_at: '2026-01-01', analysis_status: 'completed' }), ...extra };
+}
+test('new photo replaces preview asset and clears previous result, file validation and suitability', async () => {
+  let asset = { uri: 'leaf-uri', fileName: 'leaf.jpg' };
+  const render = journalHarness(scanApi(), { launchImageLibraryAsync: async () => ({ canceled: false, assets: [asset] }) });
+  await render().refresh(); await render().pick(false); await render().validateImage();
+  assert.equal(render().suitability.status, 'accepted');
+  await render().saveRecord(true);
+  assert.equal(render().result.id, 'saved');
+  asset = { uri: 'logo-uri', fileName: 'logo.png' };
+  await render().pick(false);
+  assert.equal(render().image, asset);
+  assert.equal(render().imageRevision, 2);
+  assert.equal(render().result, null);
+  assert.equal(render().validation, null);
+  assert.equal(render().suitability.status, 'not_checked');
+  assert.equal(render().records.p.length, 1);
+});
+for (const code of ['non_plant_image', 'plant_content_uncertain']) {
+  test(`${code} at analysis clears retry lock and allows a replacement photo without saving`, async () => {
+    const render = journalHarness(scanApi({ scan: async () => { throw new PlantSuitabilityError(code, 'Use another leaf photo'); } }));
+    await render().refresh(); await render().pick(false); await render().validateImage();
+    await render().saveRecord(true);
+    assert.equal(render().pendingId, null);
+    assert.equal(render().locked, false);
+    assert.equal(render().suitability.status, code === 'non_plant_image' ? 'rejected' : 'inconclusive');
+    assert.equal(render().error, 'Use another leaf photo');
+    assert.equal(render().records.p.length, 0);
+    assert.equal(render().result, null);
+    await render().pick(false);
+    assert.equal(render().error, '');
+    assert.equal(render().suitability.status, 'not_checked');
+  });
+}
+test('logo passes file validation but fails suitability and cannot start disease analysis', async () => {
+  let scans = 0;
+  const render = journalHarness(scanApi({ checkSuitability: async () => { throw new PlantSuitabilityError('non_plant_image', 'Logo rejected'); }, scan: async () => { scans++; } }));
+  await render().refresh(); await render().pick(false); await render().validateImage();
+  assert.equal(render().validation.is_valid, true);
+  assert.equal(render().suitability.status, 'rejected');
+  await render().saveRecord(true);
+  assert.equal(scans, 0);
+  assert.equal(render().pendingId, null);
+});
+test('screening service failure keeps file validation but never marks plant suitability accepted', async () => {
+  const render = journalHarness(scanApi({ checkSuitability: async () => { throw new PlantSuitabilityError('plant_screening_unavailable', 'Screening unavailable'); } }));
+  await render().refresh(); await render().pick(false); await render().validateImage();
+  assert.equal(render().validation.is_valid, true);
+  assert.equal(render().suitability.status, 'unavailable');
+  assert.ok(render().analysisBlockers.length);
+  assert.equal(render().result, null);
+});
+test('late suitability response cannot approve a discarded draft', async () => {
+  let finish, entered;
+  const started = new Promise(resolve => { entered = resolve; });
+  const render = journalHarness(scanApi({ checkSuitability: () => new Promise(resolve => { finish = resolve; entered(); }) }));
+  await render().refresh(); await render().pick(false);
+  const pending = render().validateImage();
+  await started;
+  assert.equal(render().suitability.status, 'checking');
+  render().clearDraft();
+  finish({ outcome: 'plant', message: 'Leaf' }); await pending;
+  assert.equal(render().image, null);
+  assert.equal(render().validation, null);
+  assert.equal(render().suitability.status, 'not_checked');
+});
+test('canceling picker retains the current image and its checks', async () => {
+  let canceled = false;
+  const render = journalHarness(scanApi(), { launchImageLibraryAsync: async () => ({ canceled, assets: [{ uri: 'leaf' }] }) });
+  await render().refresh(); await render().pick(false); await render().validateImage();
+  const asset = render().image;
+  canceled = true; await render().pick(false);
+  assert.equal(render().image, asset);
+  assert.equal(render().suitability.status, 'accepted');
+});

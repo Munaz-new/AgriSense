@@ -1,4 +1,4 @@
-"""Record-only persistence, with atomic request deduplication per plant."""
+"""Journal persistence with optional analysis and atomic retry deduplication per plant."""
 from hashlib import sha256
 import json
 from uuid import uuid4
@@ -10,9 +10,15 @@ class RequestConflict(ValueError):
     pass
 
 
-def save_record(database_path, upload_dir, plant_id, data, extension, fields, created_at):
+def save_record(database_path, upload_dir, plant_id, data, extension, fields, created_at, analysis=None):
     digest = sha256(data).hexdigest()
-    fingerprint = sha256(json.dumps(dict(plant_id=plant_id, image_sha256=digest, **fields),
+    fingerprint_data = dict(plant_id=plant_id, image_sha256=digest, **fields)
+    # Preserve retry fingerprints created before timezone metadata was introduced.
+    if fingerprint_data.get('observed_timezone') is None:
+        fingerprint_data.pop('observed_timezone', None)
+    if analysis is not None:
+        fingerprint_data['analysis_requested'] = True
+    fingerprint = sha256(json.dumps(fingerprint_data,
                                     sort_keys=True, allow_nan=False).encode()).hexdigest()
     target = None
     written = False
@@ -35,6 +41,8 @@ def save_record(database_path, upload_dir, plant_id, data, extension, fields, cr
                                predictor=None, is_mock=False, analysis_status='not_requested',
                                image_sha256=digest, request_fingerprint=fingerprint,
                                duplicate_of=duplicate['id'] if duplicate else None, **fields)
+            if analysis is not None:
+                observation.update(analysis(), analysis_status='completed')
             target = upload_dir / filename
             with target.open('xb') as output:
                 written = True

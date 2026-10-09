@@ -6,15 +6,19 @@ export type Plant = { id: string; name: string; created_at: string; crop_name: s
 export type SoilCondition = 'Dry' | 'Normal' | 'Wet';
 export type Observation = {
   id: string; plant_id: string; image_path: string; created_at: string;
-  disease: string | null; severity: number | null; confidence: number | null; predictor: string | null; is_mock: boolean;
+  prediction_score: number | null; disease: string | null; severity: number | null; confidence: number | null; predictor: string | null; is_mock: boolean;
   analysis_status: 'not_requested' | 'completed' | 'legacy_unknown';
-  observed_at: string | null; tracking_ref: string | null; notes: string | null;
+  observed_at: string | null; observed_timezone?: string | null; tracking_ref: string | null; notes: string | null;
   request_id: string | null; duplicate_of: string | null; checkpoint_id: string | null;
   severity_source: string | null; severity_method: string | null; severity_version: string | null; severity_scale: string | null;
-  temperature: number; humidity: number; soil_type: string; soil_condition: SoilCondition;
+  temperature: number | null; humidity: number | null; soil_type: string | null; soil_condition: SoilCondition | null;
 };
 export type ValidationResult = { is_valid: boolean; reason: string; message: string };
-export type Prediction = { disease: string; severity: number | null; confidence: number; predictor: string; is_mock: boolean };
+export type SuitabilityState = { status: 'not_checked' | 'checking' | 'accepted' | 'rejected' | 'inconclusive' | 'unavailable'; message: string };
+export class PlantSuitabilityError extends Error {
+  constructor(public code: string, message: string) { super(message); }
+}
+export type Prediction = { prediction_score: number | null; disease: string; severity: number | null; confidence: number; predictor: string; is_mock: boolean };
 export type Progression = {
   status: 'unavailable' | 'insufficient_data' | 'improving' | 'stable' | 'worsening';
   reason: string | null; message: string; delta: number | null; tracking_ref: string | null;
@@ -23,9 +27,9 @@ export type Progression = {
   policy_version: string | null; measurement: Record<string, string> | null;
 };
 export type Health = { status: string; prediction_mode: string; is_mock: boolean;
-  capabilities: { record_only: boolean; validated_analysis: boolean; severity_measurement: boolean; health_progression: boolean };
+  capabilities: { record_only: boolean; tomato_analysis: boolean; technical_image_validation: boolean; plant_content_screening: boolean; severity_measurement: boolean; health_progression: boolean };
   analysis_message: string };
-export type RecordDetails = { request_id: string; observed_at: string | null; tracking_ref: string | null; notes: string | null };
+export type RecordDetails = { request_id: string; observed_at: string | null; observed_timezone?: string | null; tracking_ref: string | null; notes: string | null };
 export class ImageValidationError extends Error {
   constructor(public validation: ValidationResult) { super(validation.message); }
 }
@@ -39,6 +43,9 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     if (!response.ok) {
       const body = await response.json().catch(() => ({}));
       if (body.detail?.is_valid === false) throw new ImageValidationError(body.detail);
+      if (['non_plant_image', 'plant_content_uncertain', 'plant_screening_unavailable'].includes(body.detail?.code)) {
+        throw new PlantSuitabilityError(body.detail.code, body.detail.message);
+      }
       throw new Error(typeof body.detail === 'string' ? body.detail : `Request failed (${response.status}). Check your input.`);
     }
     return await response.json() as T;
@@ -79,12 +86,17 @@ export const api = {
   async validateImage(image: ImagePickerAsset) {
     return request<ValidationResult>('/validate-image', { method: 'POST', body: await imageForm(image) });
   },
+  async checkSuitability(image: ImagePickerAsset) {
+    return request<{ outcome: 'plant'; message: string }>('/check-plant-suitability', { method: 'POST', body: await imageForm(image) });
+  },
   async predict(image: ImagePickerAsset) {
     return request<Prediction>('/predict', { method: 'POST', body: await imageForm(image) });
   },
-  async scan(id: string, image: ImagePickerAsset, environment: Environment) {
+  async scan(id: string, image: ImagePickerAsset, environment: Environment, details: RecordDetails) {
     const form = await imageForm(image);
-    for (const [key, value] of Object.entries(environment)) form.append(key, String(value));
+    for (const [key, value] of Object.entries({ ...environment, ...details })) {
+      if (value !== null) form.append(key, String(value));
+    }
     return request<Observation>(`/plants/${id}/observations`, { method: 'POST', body: form });
   },
 };

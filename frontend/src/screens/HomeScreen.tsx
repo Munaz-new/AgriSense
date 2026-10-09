@@ -54,7 +54,7 @@ export function HomeScreen({ j }: { j: Journal; }) {
       <Text style={s.muted}>Repeated observations build a history. Health comparison needs validated severity measurements.</Text>{j.selected&&<Button title="Open health dashboard" secondary disabled={j.busy} onPress={() => void j.openHistory('dashboard')} />}</View>
     <View style={s.section}>
       <Text style={s.heading}>Recent observations</Text>{all.slice(0,2).map(o => <ObservationCard key={o.id} observation={o} plant={j.plants.find(p => p.id===o.plant_id)} compact />)}{!all.length&&<Text style={s.muted}>Your saved photos will appear here.</Text>}</View>
-    <Text style={s.notice}>AI disease analysis will become available after the validated model is connected.</Text>
+    <Text style={s.notice}>{j.health?.analysis_message||'Connect to the backend to check analysis availability.'}</Text>
     <Button title="Refresh garden" secondary disabled={j.busy} onPress={() => void j.refresh()} />
   </>;
 }

@@ -36,7 +36,9 @@ def submit(journal, key='request-001', **overrides):
 def test_record_only_roundtrip_capabilities_and_nulls(journal):
     client, plant_id, _, path, uploads, _ = journal
     capabilities = client.get('/health').json()['capabilities']
-    assert capabilities == dict(record_only=True, validated_analysis=False, severity_measurement=False, health_progression=False)
+    assert capabilities == dict(record_only=True, technical_image_validation=True,
+                                plant_content_screening=False, tomato_analysis=False,
+                                severity_measurement=False, health_progression=False)
     assert client.get(f'/plants/{plant_id}').json()['crop_name'] == 'tomato'
     response = submit(journal, notes='  User-entered note  ')
     assert response.status_code == 201

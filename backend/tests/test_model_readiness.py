@@ -14,15 +14,17 @@ from app.main import create_app
 from app.prediction import Prediction, PredictionUnavailableError, TrainedTomatoPredictor
 
 
-def test_default_is_mock_and_missing_model_is_refused(tmp_path):
-    with TestClient(create_app(tmp_path / 'test.db', tmp_path / 'uploads')) as client:
-        assert client.get('/health').json()['is_mock'] is True
+def test_missing_model_is_unavailable_without_mock_fallback(tmp_path):
+    with TestClient(create_app(tmp_path / 'test.db', tmp_path / 'uploads',
+                               checkpoint_path=tmp_path / 'missing.pt')) as client:
+        health = client.get('/health').json()
+        assert health['is_mock'] is False
+        assert health['capabilities']['tomato_analysis'] is False
         image = BytesIO()
         Image.new('RGB', (256, 256), 'white').save(image, format='PNG')
         result = client.post('/predict', files={'image': ('leaf.png', image.getvalue())})
-        assert result.json()['is_mock'] is True
-        assert result.json()['predictor'] == 'development-mock-v1'
-    with pytest.raises(FileNotFoundError, match='keep using the development mock'):
+        assert result.status_code == 503
+    with pytest.raises(FileNotFoundError, match='analysis is unavailable'):
         TrainedTomatoPredictor(tmp_path / 'missing.pt')
 
 
@@ -33,12 +35,12 @@ def test_nullable_severity_is_saved_and_returned(tmp_path):
                               predictor='test-stub', is_mock=True)
     path, uploads = tmp_path / 'test.db', tmp_path / 'uploads'
     with TestClient(create_app(path, uploads, NoSeverityTestStub())) as client:
-        plant_id = client.post('/plants', json={'name': 'Tomato'}).json()['id']
+        plant_id = client.post('/plants', json={'name': 'Tomato', 'crop_name': 'tomato'}).json()['id']
         image = BytesIO()
         Image.new('RGB', (256, 256), 'white').save(image, format='PNG')
         response = client.post(f'/plants/{plant_id}/observations',
                                files={'image': ('leaf.png', image.getvalue())},
-                               data={'temperature': 25, 'humidity': 65, 'soil_type': 'Loamy', 'soil_condition': 'Normal'})
+                               data={'request_id': 'test-request-001', 'temperature': 25, 'humidity': 65, 'soil_type': 'Loamy', 'soil_condition': 'Normal'})
         assert response.status_code == 201, response.text
         assert response.json()['severity'] is None
         assert client.get(f'/plants/{plant_id}/observations').json()[0]['severity'] is None
@@ -71,7 +73,7 @@ def test_old_database_migration_preserves_rows_and_foreign_keys(tmp_path, severi
         assert row['analysis_status'] == 'legacy_unknown'
         assert row['observed_at'] is None and row['severity_source'] is None
         assert db.execute('SELECT crop_name FROM plants').fetchone()[0] is None
-        assert db.execute('PRAGMA user_version').fetchone()[0] == 1
+        assert db.execute('PRAGMA user_version').fetchone()[0] == 3
         assert db.execute('PRAGMA foreign_key_check').fetchall() == []
         assert next(row for row in db.execute('PRAGMA table_info(observations)') if row['name'] == 'severity')['notnull'] == 0
         db.execute('UPDATE observations SET severity = NULL WHERE id = ?', ('o',))
@@ -122,16 +124,16 @@ def test_inference_failure_returns_503_without_saving_or_fallback(tmp_path):
     uploads = tmp_path / 'uploads'
     with TestClient(create_app(tmp_path / 'test.db', uploads, predictor)) as client:
         assert client.get('/health').json()['is_mock'] is False
-        plant_id = client.post('/plants', json={'name': 'Tomato'}).json()['id']
+        plant_id = client.post('/plants', json={'name': 'Tomato', 'crop_name': 'tomato'}).json()['id']
         image = BytesIO()
         # Deliberately not a plant: technical acceptance makes no semantic claim.
         Image.new('RGB', (256, 256), 'gray').save(image, format='PNG')
         validation = client.post('/validate-image', files={'image': ('fixture.png', image.getvalue())})
         assert validation.json()['reason'] == 'technical_checks_passed'
-        assert 'not been verified' in validation.json()['message']
+        assert 'does not confirm' in validation.json()['message']
         for route in ['/predict', f'/plants/{plant_id}/observations']:
             response = client.post(route, files={'image': ('fixture.png', image.getvalue())},
-                                   data={'temperature': 25, 'humidity': 65, 'soil_type': 'Loamy',
+                                   data={'request_id': 'test-request-001', 'temperature': 25, 'humidity': 65, 'soil_type': 'Loamy',
                                          'soil_condition': 'Normal'})
             assert response.status_code == 503
             assert response.json() == {'detail': 'Prediction service unavailable. No observation was saved.'}

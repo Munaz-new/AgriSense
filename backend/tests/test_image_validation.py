@@ -1,4 +1,5 @@
 from io import BytesIO
+from uuid import uuid4
 
 from fastapi.testclient import TestClient
 from PIL import Image
@@ -41,14 +42,14 @@ def setup(tmp_path):
     app = create_app(tmp_path / 'test.db', uploads,
                      RecordingPredictor(events), RecordingValidator(events))
     with TestClient(app) as client:
-        plant_id = client.post('/plants', json={'name': 'Tomato'}).json()['id']
+        plant_id = client.post('/plants', json={'name': 'Tomato', 'crop_name': 'tomato'}).json()['id']
         yield client, plant_id, uploads, events
 
 
 def upload(client, path, data):
     # Filename and MIME must not override actual byte validation.
     return client.post(path, files={'image': ('leaf.jpg', data, 'image/jpeg')},
-                       data={'temperature': 27, 'humidity': 65, 'soil_type': 'Loamy', 'soil_condition': 'Normal'})
+                       data={'request_id': str(uuid4()), 'temperature': 27, 'humidity': 65, 'soil_type': 'Loamy', 'soil_condition': 'Normal'})
 
 
 @pytest.mark.parametrize('data,reason,status', [
@@ -85,7 +86,7 @@ def test_valid_flow_validates_before_prediction_and_save(setup, format):
     assert response.status_code == 200
     assert response.json()['is_valid'] is True
     assert response.json()['reason'] == 'technical_checks_passed'
-    assert 'not been verified' in response.json()['message']
+    assert 'does not confirm' in response.json()['message']
     assert events == ['validate']
     assert list(uploads.iterdir()) == []
     preview = upload(client, '/predict', data)
@@ -119,7 +120,7 @@ def test_future_semantic_validator_rejection_is_respected(tmp_path):
     events = []
     uploads = tmp_path / 'uploads'
     with TestClient(create_app(tmp_path / 'test.db', uploads, RecordingPredictor(events), RejectingValidator())) as client:
-        plant_id = client.post('/plants', json={'name': 'Tomato'}).json()['id']
+        plant_id = client.post('/plants', json={'name': 'Tomato', 'crop_name': 'tomato'}).json()['id']
         for path in ['/validate-image', '/predict', f'/plants/{plant_id}/observations']:
             response = upload(client, path, picture())
             assert response.status_code == 422

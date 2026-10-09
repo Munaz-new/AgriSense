@@ -1,7 +1,7 @@
-import { useEffect,useState } from 'react';
+import { useEffect,useState,useRef } from 'react';
 import * as ImagePicker from 'expo-image-picker';
-import { api,Observation,Plant,SoilCondition,ValidationResult,Health,Progression,ImageValidationError } from '../api';
-import { observationTime,retryId } from '../recordState';
+import { api,Observation,Plant,SoilCondition,ValidationResult,Health,Progression,ImageValidationError,PlantSuitabilityError,SuitabilityState } from '../api';
+import { observationTime,retryId,captureObservation,scanBlockers } from '../recordState';
 import type { Screen } from '../navigation/BottomNav';
 
 export function useJournal() {
@@ -18,14 +18,19 @@ export function useJournal() {
   const [cropName,setCropName]=useState('');
   const [image,setImage]=useState<ImagePicker.ImagePickerAsset|null>(null);
   const [validation,setValidation]=useState<ValidationResult|null>(null);
+  const [suitability,setSuitability]=useState<SuitabilityState>({ status: 'not_checked',message: '' });
+  const [imageRevision,setImageRevision]=useState(0);
+  const draftVersion=useRef(0);
   const [temperature,setTemperature]=useState('');
   const [humidity,setHumidity]=useState('');
   const [soilType,setSoilType]=useState('');
-  const [condition,setCondition]=useState<SoilCondition>('Normal');
+  const [condition,setCondition]=useState<SoilCondition|''>('');
   const [observedAt,setObservedAt]=useState('');
+  const [observedTimezone,setObservedTimezone]=useState('');
   const [trackingRef,setTrackingRef]=useState('');
   const [notes,setNotes]=useState('');
   const [pendingId,setPendingId]=useState<string|null>(null);
+  const [pendingAnalysis,setPendingAnalysis]=useState<boolean|null>(null);
   const [busy,setBusy]=useState(false);
   const [error,setError]=useState('');
   const locked=busy||pendingId!==null;
@@ -33,14 +38,23 @@ export function useJournal() {
   async function run(action: () => Promise<void>) {
     setBusy(true); setError('');
     try { await action(); } catch(e) {
-      if(e instanceof ImageValidationError) setValidation(e.validation);
+      if(e instanceof ImageValidationError) {
+        setValidation(e.validation); setSuitability({ status: 'not_checked',message: '' });
+        setPendingId(null); setPendingAnalysis(null);
+      }
+      if(e instanceof PlantSuitabilityError) {
+        setSuitability({ status: e.code==='non_plant_image'? 'rejected':e.code==='plant_content_uncertain'? 'inconclusive':'unavailable',message: e.message });
+        if(e.code!=='plant_screening_unavailable') { setPendingId(null); setPendingAnalysis(null); }
+      }
       setError(e instanceof Error? e.message:'Something went wrong. Please retry.');
     } finally { setBusy(false); }
   }
   function clearDraft() {
-    setImage(null); setValidation(null); setPendingId(null);
-    setTemperature(''); setHumidity(''); setSoilType(''); setCondition('Normal');
-    setObservedAt(''); setTrackingRef(''); setNotes('');
+    draftVersion.current+=1;
+    setResult(null); setError(''); setSuitability({ status: 'not_checked',message: '' });
+    setImage(null); setValidation(null); setPendingId(null); setPendingAnalysis(null);
+    setTemperature(''); setHumidity(''); setSoilType(''); setCondition('');
+    setObservedAt(''); setObservedTimezone(''); setTrackingRef(''); setNotes('');
   }
   async function loadPlants() {
     try {
@@ -66,6 +80,7 @@ export function useJournal() {
     });
   }
   async function pick(camera: boolean) {
+    if(locked) return;
     await run(async () => {
       if(camera) {
         const permission=await ImagePicker.requestCameraPermissionsAsync();
@@ -73,29 +88,53 @@ export function useJournal() {
       }
       const options: ImagePicker.ImagePickerOptions={ mediaTypes: ['images'],allowsEditing: true,quality: 0.85 };
       const picked=camera? await ImagePicker.launchCameraAsync(options):await ImagePicker.launchImageLibraryAsync(options);
-      if(!picked.canceled) { clearDraft(); setImage(picked.assets[0]); }
+      if(!picked.canceled) {
+        clearDraft(); setImage(picked.assets[0]); setImageRevision(value => value+1);
+        const captured=captureObservation();
+        setObservedAt(captured.observedAt); setObservedTimezone(captured.observedTimezone);
+      }
     });
   }
   async function validateImage() {
-    if(!image) return;
+    if(!image||locked) return;
+    const version=draftVersion.current;
     setValidation(null);
-    await run(async () => { setValidation(await api.validateImage(image)); });
-  }
-  async function saveRecord() {
-    if(!selected||!image||!validation?.is_valid) return;
+    setSuitability({ status: 'not_checked',message: '' });
     await run(async () => {
-      const temp=Number(temperature); const hum=Number(humidity);
-      if(!temperature.trim()||!Number.isFinite(temp)||temp<-50||temp>70) throw new Error('Enter a temperature between -50 and 70°C.');
-      if(!humidity.trim()||!Number.isFinite(hum)||hum<0||hum>100) throw new Error('Enter humidity between 0 and 100%.');
-      if(!soilType.trim()) throw new Error('Enter the soil type.');
+      try {
+        const checked=await api.validateImage(image);
+        if(version!==draftVersion.current) return;
+        setValidation(checked);
+        if(!checked.is_valid) return;
+        setSuitability({ status: 'checking',message: 'Checking plant suitability…' });
+        const screened=await api.checkSuitability(image);
+        if(version!==draftVersion.current) return;
+        if(screened.outcome!=='plant') throw new Error('Plant suitability was not accepted. Try another photo.');
+        setSuitability({ status: 'accepted',message: screened.message });
+      } catch(e) {
+        if(version!==draftVersion.current) return;
+        if(!(e instanceof ImageValidationError)) setSuitability({ status: 'unavailable',message: e instanceof Error? e.message:'Suitability check failed.' });
+        throw e;
+      }
+    });
+  }
+  async function saveRecord(analyze=false) {
+    const reasons=scanBlockers({ busy,selected,image,validation,suitability,health,pendingAnalysis,temperature,humidity,soilType,condition },analyze);
+    if(reasons.length) { setError(reasons.join(' ')); return; }
+    if(!selected||!image) return;
+    await run(async () => {
+      if(pendingAnalysis!==null&&pendingAnalysis!==analyze) throw new Error('Retry the same action or discard the draft after checking history.');
+      if(analyze&&(!health?.capabilities.tomato_analysis||selected.crop_name?.trim().toLowerCase()!=='tomato')) throw new Error('Tomato analysis is unavailable for this plant. Save without analysis instead.');
+      const temp=temperature.trim()? Number(temperature):null;
+      const hum=humidity.trim()? Number(humidity):null;
       const timestamp=observationTime(observedAt);
       const id=retryId(pendingId);
-      setPendingId(id);
-      const saved=await api.record(selected.id,image,
-        { temperature: temp,humidity: hum,soil_type: soilType.trim(),soil_condition: condition },
-        { request_id: id,observed_at: timestamp,tracking_ref: trackingRef.trim()||null,notes: notes.trim()||null });
+      setPendingId(id); setPendingAnalysis(analyze);
+      const saved=await (analyze? api.scan:api.record)(selected.id,image,
+        { temperature: temp,humidity: hum,soil_type: soilType.trim()||null,soil_condition: condition||null },
+        { request_id: id,observed_at: timestamp,observed_timezone: observedTimezone,tracking_ref: trackingRef.trim()||null,notes: notes.trim()||null });
       setRecords(previous => ({ ...previous,[selected.id]: [...(previous[selected.id]||[]).filter(item => item.id!==saved.id),saved].sort((a,b) => (a.observed_at||a.created_at).localeCompare(b.observed_at||b.created_at)) }));
-      setResult(saved); clearDraft(); setScreen('result');
+      clearDraft(); setResult(saved); setScreen('result');
     });
   }
 
@@ -116,10 +155,12 @@ export function useJournal() {
     });
   }
   return {
+    analysisBlockers: scanBlockers({ busy,selected,image,validation,suitability,health,pendingAnalysis,temperature,humidity,soilType,condition },true),
+    recordBlockers: scanBlockers({ busy,selected,image,validation,suitability,health,pendingAnalysis,temperature,humidity,soilType,condition },false),
     health,screen,plants,selected,records,observations,progress,progressRef,result,
-    name,setName,cropName,setCropName,image,validation,temperature,setTemperature,
-    humidity,setHumidity,soilType,setSoilType,condition,setCondition,observedAt,setObservedAt,
-    trackingRef,setTrackingRef,notes,setNotes,pendingId,busy,error,locked,navigate,
+    name,setName,cropName,setCropName,image,imageRevision,validation,suitability,temperature,setTemperature,
+    humidity,setHumidity,soilType,setSoilType,condition,setCondition,observedAt,observedTimezone,
+    trackingRef,setTrackingRef,notes,setNotes,pendingId,pendingAnalysis,busy,error,locked,navigate,
     openHistory,pick,validateImage,saveRecord,clearDraft,selectPlant,startScan,addPlant,
     refresh: () => run(loadPlants),setProgressRef: (value: string) => { setProgressRef(value); setProgress(null); }
   };

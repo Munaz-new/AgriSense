@@ -1,6 +1,7 @@
 import React from 'react';
 import { Image,Text,View } from 'react-native';
 import { API_URL,Observation,Plant } from '../api';
+import { TreatmentGuidance } from './TreatmentGuidance';
 import { recordLabels } from '../recordState';
 import { s } from '../theme';
 import { Badge,date } from './UI';
@@ -14,7 +15,7 @@ export function ObservationCard({ observation: o,plant,compact=false }: { observ
     </View>
     </View>
     {!compact&&<Image accessibilityLabel="Recorded plant photo" source={{ uri: `${API_URL}${o.image_path}` }} style={s.photo} />}
-    <Badge>{o.is_mock? 'Historical synthetic record':o.analysis_status==='not_requested'? 'Not assessed':'Stored analysis'}</Badge>
+    <Badge>{o.is_mock? 'Historical synthetic record':o.analysis_status==='not_requested'? 'Not assessed':o.analysis_status==='completed'? 'Disease analysis completed':'Historical analysis'}</Badge>
     {!compact&&<>
       <View style={s.section}>
         <Text style={s.heading}>{labels.disease}</Text>
@@ -22,10 +23,13 @@ export function ObservationCard({ observation: o,plant,compact=false }: { observ
         <Text style={s.body}>{labels.confidence}</Text>
       </View>
       <Text style={s.notice}>{o.analysis_status==='not_requested'&&!o.is_mock? 'Recorded without validated disease analysis.':labels.notice}</Text>
+      <TreatmentGuidance observation={o} />
       <View style={s.divider} />
       <Text style={s.eyebrow}>Observation details</Text>
       <Text style={s.muted}>{o.observed_at? `Observed ${date(o.observed_at)}`:'Observation time not supplied'}{'\n'}Saved {date(o.created_at)}</Text>
-      <Text style={s.body}>{o.temperature}°C · {o.humidity}% humidity{'\n'}{o.soil_type} soil · {o.soil_condition}</Text>
+      {o.observed_timezone&&<Text style={s.muted}>Captured timezone: {o.observed_timezone}</Text>}
+      <Text style={s.muted}>Observation ID: {o.id}</Text>
+      <Text style={s.body}>{o.temperature===null? 'Temperature not recorded':`${o.temperature}°C`} · {o.humidity===null? 'Humidity not recorded':`${o.humidity}% humidity`}{'\n'}{o.soil_type? `${o.soil_type} soil`:'Soil type not recorded'} · {o.soil_condition||'Soil condition not recorded'}</Text>
       {o.tracking_ref&&<Text style={s.body}>Leaf / site: {o.tracking_ref}</Text>}{o.notes&&<Text style={s.body}>{o.notes}</Text>}
       <Text style={s.muted}>Environment is user-entered context only.</Text>
       {o.predictor&&<Text style={s.muted}>Analysis source: {o.predictor}</Text>}{o.checkpoint_id&&<Text style={s.muted}>Model artifact: {o.checkpoint_id}</Text>}
