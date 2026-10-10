@@ -18,7 +18,7 @@ export function recordLabels(record: Pick<Observation, 'disease' | 'severity' | 
     notice: record.is_mock ? 'DEVELOPMENT MOCK • Historical demo values, not a diagnosis.'
       : unanalysed ? 'Recorded without analysis. No disease or severity conclusion.'
       : record.analysis_status === 'legacy_unknown' ? 'Historical analysis • measurement provenance may be unavailable.'
-      : 'Tomato model prediction • not a whole-plant health assessment. Plant screening does not establish tomato identity or diagnostic accuracy; screening provenance is unavailable for historical records. Scores are uncalibrated, not guaranteed accuracy. Even a high score or healthy label may be wrong. If symptoms disagree, seek local diagnostic advice.',
+      : 'Experimental AI prediction — not a validated diagnosis. This is not a whole-plant health assessment. Plant screening does not establish tomato identity or diagnostic accuracy; screening provenance is unavailable for historical records. Scores are uncalibrated and do not represent verified correctness. Even a high score or healthy label may be wrong. If symptoms disagree, seek local diagnostic advice.',
   };
 }
 

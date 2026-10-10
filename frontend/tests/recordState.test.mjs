@@ -40,6 +40,7 @@ test('legacy mock values remain labelled synthetic', () => {
   assert.match(labels.severity, /synthetic demo/);
   assert.match(labels.confidence, /synthetic/);
   assert.match(labels.notice, /not a diagnosis/);
+  assert.doesNotMatch(labels.notice, /Experimental AI prediction/);
 });
 test('unavailable or incomplete comparison never displays a positive health label', () => {
   assert.equal(progressionLabel({ status: 'insufficient_data' }), 'Insufficient data');
@@ -64,12 +65,22 @@ test('observation time remains unknown or explicitly timezone-qualified', () => 
   assert.throws(() => observationTime('2025-02-30T00:00:00Z'));
 });
 
-test('real predictions label uncalibrated score and unavailable severity', () => {
+test('real predictions are marked experimental, unvalidated and uncalibrated with no fabricated severity', () => {
   const labels = recordLabels({ analysis_status: 'completed', disease: 'Early_blight', confidence: 72.5, severity: null, is_mock: false });
   assert.equal(labels.disease, 'Early_blight');
   assert.equal(labels.confidence, '72.5% prediction score (uncalibrated)');
   assert.equal(labels.severity, 'Severity not measured');
+  assert.match(labels.notice, /Experimental AI prediction — not a validated diagnosis/);
+  assert.match(labels.notice, /do not represent verified correctness/);
+  assert.match(labels.notice, /may be wrong/);
   assert.match(labels.notice, /screening does not establish tomato identity/);
+});
+
+test('completed mock predictions never receive the real experimental AI label', () => {
+  const labels = recordLabels({ analysis_status: 'completed', disease: 'Early_blight', confidence: 90, severity: null, is_mock: true });
+  assert.match(labels.notice, /DEVELOPMENT MOCK/);
+  assert.doesNotMatch(labels.notice, /Experimental AI prediction/);
+  assert.equal(labels.severity, 'Severity not measured');
 });
 
 test('automatic observation timestamp captures local timezone and offset', async () => {

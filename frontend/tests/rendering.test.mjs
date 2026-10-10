@@ -35,7 +35,7 @@ const real = { id: 'render-test', plant_id: 'p', image_path: '/test.png', create
 
 test('saved result/history card renders prediction, uncertainty, sourced guidance and missing environment', () => {
   const html = renderToStaticMarkup(React.createElement(ObservationCard, { observation: real }));
-  for (const text of ['Early_blight', 'uncalibrated', 'not guaranteed accuracy', 'Treatment and management guidance', 'UMN Extension', 'Temperature not recorded', 'Humidity not recorded', 'Asia/Kolkata']) assert.ok(html.includes(text), text);
+  for (const text of ['Early_blight', 'Experimental AI prediction — not a validated diagnosis', 'uncalibrated', 'do not represent verified correctness', 'Treatment and management guidance', 'UMN Extension', 'Temperature not recorded', 'Humidity not recorded', 'Asia/Kolkata']) assert.ok(html.includes(text), text);
 });
 
 test('record-only and historical mock cards do not render treatment guidance', () => {
