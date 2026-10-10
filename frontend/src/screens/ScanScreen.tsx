@@ -39,7 +39,7 @@ export function ScanScreen({ j }: { j: Journal; }) {
         {j.validation&&<Text style={j.validation.is_valid? s.notice:s.error}>{j.validation.message}</Text>}
         {j.image&&<View accessibilityLiveRegion="polite">
           <Text style={['rejected','inconclusive','unavailable'].includes(j.suitability.status)? s.error:s.notice}>{
-            j.suitability.status==='accepted'? 'Plant suitability accepted':
+            j.suitability.status==='accepted'? 'Plant-like content detected; tomato identity is not verified.':
             j.suitability.status==='rejected'? 'Image rejected — non-plant content':
             j.suitability.status==='inconclusive'? 'Image rejected for analysis — plant content uncertain':
             j.suitability.status==='checking'? 'Checking plant suitability…':

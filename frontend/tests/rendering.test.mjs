@@ -58,7 +58,7 @@ test('Scan renders the current preview and distinct file, suitability and diseas
   const base = { plants: [{ id: 'p', crop_name: 'tomato' }], selected: { id: 'p', crop_name: 'tomato' },
     health: { capabilities: { tomato_analysis: true } }, image: { uri: 'current-logo.png', fileName: 'current-logo.png' }, imageRevision: 2,
     validation: { is_valid: true, message: 'File checks only' }, analysisBlockers: [], recordBlockers: [], observedAt: '2026-01-01' };
-  for (const [status, label] of [['not_checked','Plant suitability not checked'], ['accepted','Plant suitability accepted'],
+  for (const [status, label] of [['not_checked','Plant suitability not checked'], ['accepted','Plant-like content detected; tomato identity is not verified.'],
     ['rejected','Image rejected — non-plant content'], ['inconclusive','Image rejected for analysis — plant content uncertain'],
     ['unavailable','Plant suitability unavailable']]) {
     const html = renderToStaticMarkup(React.createElement(ScanScreen, { j: { ...base, suitability: { status, message: 'Screening detail' } } }));
