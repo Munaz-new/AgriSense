@@ -58,12 +58,88 @@ def test_hash_integrity_and_exact_manifest_overlap(tmp_path):
     manifest = tmp_path / 'manifest.json'
     manifest.write_text(json.dumps({'splits': {'train': [{'path': 'same.png'}]}}))
     report = validate(tmp_path, manifest, source)
-    assert report['overlap_check'] == 'checked'
+    assert report['overlap_check'] == 'complete'
+    assert report['overlap_result'] == 'exact_overlaps_found'
     assert len(report['exact_overlap_hits']) == 2
     assert any('exact hash match' in error for error in report['errors'])
     record['raw_sha256'] = '0' * 64
     write_labels(tmp_path / 'labels.csv', [record])
     assert any('raw_sha256 does not match' in error for error in validate(tmp_path, manifest, source)['errors'])
+
+
+def write_manifest(path, entries):
+    path.write_text(json.dumps({'splits': entries}))
+
+
+def test_complete_coverage_deduplicates_logical_references_and_empty_collection(tmp_path):
+    source = tmp_path / 'source'
+    source.mkdir()
+    Image.new('RGB', (4, 3), (1, 2, 3)).save(source / 'one.png')
+    manifest = tmp_path / 'manifest.json'
+    write_manifest(manifest, {'train': [{'path': 'one.png'}], 'val': [{'path': 'one.png'}]})
+    write_labels(tmp_path / 'labels.csv')
+    report = validate(tmp_path, manifest, source)
+    coverage = report['source_coverage']
+    assert coverage['total_referenced_entries'] == 2
+    assert coverage['unique_source_files'] == 1
+    assert coverage['successfully_read_hashed'] == 1
+    assert coverage['duplicate_references_skipped'] == 1
+    assert coverage['missing'] == coverage['unreadable'] == coverage['skipped'] == 0
+    assert coverage['complete'] is True
+    assert report['evaluation_candidate_count'] == 0
+    assert report['overlap_check'] == 'no_evaluation_candidates'
+    assert report['overlap_result'] == 'no_evaluation_candidates'
+
+
+def test_incomplete_coverage_reports_missing_source_without_success_claim(tmp_path):
+    source = tmp_path / 'source'
+    source.mkdir()
+    manifest = tmp_path / 'manifest.json'
+    write_manifest(manifest, {'train': [{'path': 'missing.png'}]})
+    write_labels(tmp_path / 'labels.csv')
+    report = validate(tmp_path, manifest, source)
+    assert report['source_coverage']['missing'] == 1
+    assert report['source_coverage']['complete'] is False
+    assert report['overlap_check'] == 'incomplete'
+    assert report['overlap_result'] == 'no_evaluation_candidates'
+
+
+def test_incomplete_coverage_reports_unreadable_source(tmp_path):
+    source = tmp_path / 'source'
+    source.mkdir()
+    (source / 'bad.png').write_bytes(b'not an image')
+    manifest = tmp_path / 'manifest.json'
+    write_manifest(manifest, {'train': [{'path': 'bad.png'}]})
+    write_labels(tmp_path / 'labels.csv')
+    report = validate(tmp_path, manifest, source)
+    assert report['source_coverage']['unreadable'] == 1
+    assert report['source_coverage']['successfully_read_hashed'] == 0
+    assert report['source_coverage']['complete'] is False
+    assert report['overlap_check'] == 'incomplete'
+
+
+def test_complete_overlap_scan_distinguishes_no_exact_overlap(tmp_path):
+    workspace = tmp_path / 'evaluation'
+    workspace.mkdir()
+    image_dir = workspace / 'tomato-leaves'
+    image_dir.mkdir()
+    eval_image = image_dir / 'candidate.png'
+    Image.new('RGB', (4, 3), (100, 110, 120)).save(eval_image)
+    from model.validate_independent_evaluation import _decoded_digest, _digest
+    write_labels(workspace / 'labels.csv', [row(
+        image_file='tomato-leaves/candidate.png', raw_sha256=_digest(eval_image),
+        decoded_rgb_sha256=_decoded_digest(eval_image))])
+    source = tmp_path / 'source'
+    source.mkdir()
+    Image.new('RGB', (4, 3), (1, 2, 3)).save(source / 'source.png')
+    manifest = tmp_path / 'manifest.json'
+    write_manifest(manifest, {'train': [{'path': 'source.png'}]})
+    report = validate(workspace, manifest, source)
+    assert report['source_coverage']['complete'] is True
+    assert report['evaluation_candidate_count'] == 1
+    assert report['overlap_check'] == 'complete'
+    assert report['overlap_result'] == 'no_exact_overlaps'
+    assert report['exact_overlap_hits'] == []
 
 
 def test_header_missing_required_field_is_error(tmp_path):
