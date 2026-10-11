@@ -10,7 +10,7 @@ import * as recordState from '../src/recordState.ts';
 class PlantSuitabilityError extends Error {
   constructor(code, message) { super(message); this.code = code; }
 }
-function journalHarness(api, picker = {}) {
+function journalHarness(api, picker = {}, drafts = {}) {
   api = { checkSuitability: async () => ({ outcome: 'plant', message: 'Leaf content supported' }), ...api };
   const state = [];
   let cursor = 0;
@@ -35,17 +35,68 @@ function journalHarness(api, picker = {}) {
   }).outputText;
   const exports = {};
   runInNewContext(compiled, {
-    exports, Error,
+    exports, Error, URL,
     require(name) {
       if (name === 'react') return react;
       if (name === '../api') return { api, PlantSuitabilityError, ImageValidationError: class extends Error {} };
       if (name === '../recordState') return recordState;
+      if (name === '../draftStore') return { draftStorageAvailable: () => false, writeDraft: async () => false, readDraft: async () => null, removeDraft: async () => {}, ...drafts };
       if (name === 'expo-image-picker') return { launchImageLibraryAsync: async () => ({ canceled: false, assets: [{ uri: 'test-image' }] }), ...picker };
       throw new Error(`Unexpected import: ${name}`);
     },
   });
   return () => { cursor = 0; return exports.useJournal(); };
 }
+
+test('two save taps before a render submit one request and persist its identity before sending', async () => {
+  let finish;
+  const pending = new Promise(resolve => { finish = resolve; });
+  const events = [];
+  const render = journalHarness({
+    health: async () => ({ capabilities: { record_only: true } }), plants: async () => [{ id:'p' }], observations: async () => [],
+    validateImage: async () => ({ is_valid:true }),
+    record: async (...args) => { events.push(['submit',args[3].request_id]); await pending; return { id:'r',created_at:'2025-01-01' }; },
+  }, {}, { writeDraft: async draft => { events.push(['persist',draft.pendingId]); return true; } });
+  await render().refresh(); await render().pick(false); await render().validateImage(); render().setCondition('Normal');
+  const staleRender = render();
+  const first = staleRender.saveRecord(); const second = staleRender.saveRecord();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(events.length,2);
+  assert.deepEqual(events.map(e => e[0]),['persist','submit']);
+  assert.equal(events[0][1],events[1][1]);
+  finish(); await Promise.all([first,second]);
+});
+
+test('storage failure prevents transmission and allows a later save', async () => {
+  let fail=true, calls=0;
+  const render=journalHarness({ health: async () => ({ capabilities:{record_only:true} }),
+    plants:async()=>[{id:'p'}],observations:async()=>[],validateImage:async()=>({is_valid:true}),
+    record:async()=>{calls++;return {id:'r',created_at:'2025-01-01'};},
+  },{}, {writeDraft:async()=>{if(fail)throw new Error('storage full');return true;}});
+  await render().refresh();await render().pick(false);await render().validateImage();render().setCondition('Normal');
+  await render().saveRecord();assert.equal(calls,0);assert.equal(render().pendingId,null);assert.match(render().error,/storage full/);
+  fail=false;await render().saveRecord();assert.equal(calls,1);
+});
+
+test('recovering an already saved request opens its record without resubmitting', async () => {
+  let deleted=0;
+  const row={id:'saved',request_id:'pending-001',created_at:'2025-01-01'};
+  const render=journalHarness({plants:async()=>[{id:'p'}],observations:async()=>[row]}, {}, {
+    readDraft:async()=>({plantId:'p',pendingId:'pending-001'}),removeDraft:async()=>{deleted++;},
+  });
+  await render().restoreDraft();assert.equal(render().screen,'result');assert.equal(render().result,row);assert.equal(deleted,1);
+});
+
+test('recovering an uncertain save retains identity and requires new photo checks', async () => {
+  const draft={plantId:'p',pendingId:'pending-001',pendingAnalysis:false,photo:new Blob(['photo']),
+    fileName:'leaf.jpg',mimeType:'image/jpeg',temperature:'',humidity:'0',soilType:'',condition:'Normal',
+    observedAt:'2025-01-01T00:00:00Z',observedTimezone:'UTC',trackingRef:'',notes:'draft notes'};
+  const render=journalHarness({plants:async()=>[{id:'p'}],observations:async()=>[]},{},{readDraft:async()=>draft});
+  await render().restoreDraft();assert.equal(render().pendingId,draft.pendingId);assert.equal(render().locked,true);
+  assert.equal(render().humidity,'0');assert.equal(render().temperature,'');assert.equal(render().validation,null);
+  assert.equal(render().suitability.status,'not_checked');assert.ok(render().image.uri.startsWith('blob:'));
+  render().clearDraft();
+});
 
 for (const failurePoint of ['health', 'plants', 'observations']) {
   test(`failed ${failurePoint} refresh clears connected state and a later success reconnects`, async () => {

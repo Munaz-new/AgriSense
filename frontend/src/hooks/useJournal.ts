@@ -3,6 +3,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { api,Observation,Plant,SoilCondition,ValidationResult,Health,Progression,ImageValidationError,PlantSuitabilityError,SuitabilityState } from '../api';
 import { observationTime,retryId,captureObservation,scanBlockers } from '../recordState';
 import type { Screen } from '../navigation/BottomNav';
+import { draftStorageAvailable,writeDraft,readDraft,removeDraft } from '../draftStore';
 
 export function useJournal() {
   const [health,setHealth]=useState<Health|null>(null);
@@ -33,9 +34,16 @@ export function useJournal() {
   const [pendingAnalysis,setPendingAnalysis]=useState<boolean|null>(null);
   const [busy,setBusy]=useState(false);
   const [error,setError]=useState('');
+  const operation=useRef(false);
+  const recoveredUri=useRef<string|null>(null);
+  const [draftAvailable,setDraftAvailable]=useState(false);
+  const [draftMessage,setDraftMessage]=useState('');
   const locked=busy||pendingId!==null;
 
   async function run(action: () => Promise<void>) {
+    // React state updates are asynchronous; guard rapid taps before the next render.
+    if(operation.current) return;
+    operation.current=true;
     setBusy(true); setError('');
     try { await action(); } catch(e) {
       if(e instanceof ImageValidationError) {
@@ -47,9 +55,15 @@ export function useJournal() {
         if(e.code!=='plant_screening_unavailable') { setPendingId(null); setPendingAnalysis(null); }
       }
       setError(e instanceof Error? e.message:'Something went wrong. Please retry.');
-    } finally { setBusy(false); }
+    } finally { operation.current=false; setBusy(false); }
+  }
+  function forgetStoredDraft() {
+    setDraftAvailable(false);
+    void removeDraft().catch(() => { setDraftAvailable(true); setDraftMessage('The local recovery copy could not be removed. Retry discarding it; this does not delete saved observations.'); });
   }
   function clearDraft() {
+    if(recoveredUri.current) { URL.revokeObjectURL(recoveredUri.current); recoveredUri.current=null; }
+    forgetStoredDraft(); setDraftMessage('');
     draftVersion.current+=1;
     setResult(null); setError(''); setSuitability({ status: 'not_checked',message: '' });
     setImage(null); setValidation(null); setPendingId(null); setPendingAnalysis(null);
@@ -68,7 +82,44 @@ export function useJournal() {
       throw e;
     }
   }
-  useEffect(() => { void run(loadPlants); },[]);
+  useEffect(() => {
+    void run(async () => {
+      try { setDraftAvailable((await readDraft())!==null); }
+      catch(e) { setDraftAvailable(true); setDraftMessage(e instanceof Error?e.message:'Recovery storage is unavailable.'); }
+      await loadPlants();
+    });
+    return () => { if(recoveredUri.current) URL.revokeObjectURL(recoveredUri.current); };
+  },[]);
+  function draftFields(id=pendingId,analysis=pendingAnalysis) {
+    return { plantId: selected!.id,temperature,humidity,soilType,condition,observedAt,observedTimezone,trackingRef,notes,pendingId:id,pendingAnalysis:analysis };
+  }
+  async function keepDraft() {
+    if(!selected||!image||locked) return;
+    await run(async () => {
+      if(await writeDraft(draftFields(),image)) { setDraftAvailable(true); setDraftMessage('Draft kept on this browser. It includes your photo and notes.'); }
+    });
+  }
+  async function restoreDraft() {
+    if(locked||image) return;
+    await run(async () => {
+      const draft=await readDraft();
+      if(!draft) { setDraftAvailable(false); return; }
+      const items=await api.plants();
+      const plant=items.find(p => p.id===draft.plantId);
+      if(!plant) throw new Error('The draft’s plant is unavailable on this backend. Its recovery copy has been retained.');
+      const history=await api.observations(plant.id);
+      setPlants(items); setSelected(plant); setRecords(previous => ({ ...previous,[plant.id]:history }));
+      const saved=draft.pendingId? history.find(r => r.request_id===draft.pendingId):undefined;
+      if(saved) { clearDraft(); setResult(saved); setScreen('result'); return; }
+      recoveredUri.current=URL.createObjectURL(draft.photo);
+      setImage({ uri:recoveredUri.current,width:0,height:0,fileName:draft.fileName,mimeType:draft.mimeType });
+      setTemperature(draft.temperature); setHumidity(draft.humidity); setSoilType(draft.soilType); setCondition(draft.condition as SoilCondition|'');
+      setObservedAt(draft.observedAt); setObservedTimezone(draft.observedTimezone); setTrackingRef(draft.trackingRef); setNotes(draft.notes);
+      setPendingId(draft.pendingId); setPendingAnalysis(draft.pendingAnalysis);
+      setValidation(null); setSuitability({ status:'not_checked',message:'' }); setScreen('scan');
+      setDraftMessage('Draft restored. Check the photo again before saving. Any uncertain submission keeps its original request ID.');
+    });
+  }
   function navigate(next: Screen) { setError(''); setScreen(next); }
   async function openHistory(next: 'history'|'dashboard',plant=selected) {
     if(!plant) { navigate('plants'); return; }
@@ -81,6 +132,7 @@ export function useJournal() {
   }
   async function pick(camera: boolean) {
     if(locked) return;
+    if(draftAvailable&&!image) { setError('Restore or explicitly discard the local recovery copy before starting another photo.'); return; }
     await run(async () => {
       if(camera) {
         const permission=await ImagePicker.requestCameraPermissionsAsync();
@@ -96,7 +148,7 @@ export function useJournal() {
     });
   }
   async function validateImage() {
-    if(!image||locked) return;
+    if(!image||busy) return;
     const version=draftVersion.current;
     setValidation(null);
     setSuitability({ status: 'not_checked',message: '' });
@@ -129,6 +181,8 @@ export function useJournal() {
       const hum=humidity.trim()? Number(humidity):null;
       const timestamp=observationTime(observedAt);
       const id=retryId(pendingId);
+      // Persist exact bytes and request identity before transmission on supported browsers.
+      await writeDraft(draftFields(id,analyze),image);
       setPendingId(id); setPendingAnalysis(analyze);
       const saved=await (analyze? api.scan:api.record)(selected.id,image,
         { temperature: temp,humidity: hum,soil_type: soilType.trim()||null,soil_condition: condition||null },
@@ -140,6 +194,7 @@ export function useJournal() {
 
   function selectPlant(plant: Plant) {
     if(locked||plant.id===selected?.id) return;
+    if(draftAvailable&&!image) { setError('Open Scan to restore or discard the local recovery copy first.'); return; }
     setSelected(plant); setObservations([]); setProgress(null); setProgressRef(''); setResult(null); clearDraft();
   }
   function startScan(plant=selected) {
@@ -147,6 +202,7 @@ export function useJournal() {
     navigate('scan');
   }
   async function addPlant() {
+    if(draftAvailable&&!image) { setError('Open Scan to restore or discard the local recovery copy first.'); return; }
     await run(async () => {
       const plant=await api.addPlant(name.trim(),cropName.trim()||null);
       setPlants(previous => [plant,...previous]); setSelected(plant);
@@ -162,6 +218,7 @@ export function useJournal() {
     humidity,setHumidity,soilType,setSoilType,condition,setCondition,observedAt,observedTimezone,
     trackingRef,setTrackingRef,notes,setNotes,pendingId,pendingAnalysis,busy,error,locked,navigate,
     openHistory,pick,validateImage,saveRecord,clearDraft,selectPlant,startScan,addPlant,
+    draftAvailable,draftMessage,draftRecoverySupported:draftStorageAvailable(),keepDraft,restoreDraft,forgetStoredDraft,
     refresh: () => run(loadPlants),setProgressRef: (value: string) => { setProgressRef(value); setProgress(null); }
   };
 }

@@ -31,7 +31,7 @@ test('record save/retry calls only records and retains request identity, omittin
   const details = { request_id: 'same-request', observed_at: null, tracking_ref: null, notes: null };
   await api.record('plant-a', image, context, details);
   await api.record('plant-a', image, context, details);
-  const saves = requests.filter(item => item.options);
+  const saves = requests.filter(item => item.options?.method === 'POST');
   assert.equal(saves.length, 2);
   for (const { url, options } of saves) {
     assert.equal(url, 'http://test-only/plants/plant-a/records');
@@ -54,7 +54,7 @@ test('analysis save sends image, context and stable request identity to observat
   const details = { request_id: 'analysis-request', observed_at: '2025-01-01T10:00:00Z', tracking_ref: 'leaf-a', notes: 'field note' };
   await api.scan('plant-a', { uri: 'fixture-image', fileName: 'fixture.png' },
     { temperature: 25, humidity: 60, soil_type: 'Loamy', soil_condition: 'Normal' }, details);
-  const save = requests.find(item => item.options);
+  const save = requests.find(item => item.options?.method === 'POST');
   assert.equal(save.url, 'http://test-only/plants/plant-a/observations');
   for (const [key, value] of Object.entries(details)) assert.equal(save.options.body.get(key), value);
   assert.ok(save.options.body.get('image') instanceof Blob);
@@ -67,7 +67,7 @@ test('analysis omits missing environment instead of manufacturing values', async
   await api.scan('plant-a', { uri: 'fixture-image' },
     { temperature: null, humidity: null, soil_type: null, soil_condition: null },
     { request_id: 'optional-env', observed_at: '2026-01-01T00:00:00Z', observed_timezone: 'Asia/Kolkata (UTC+05:30)', tracking_ref: null, notes: null });
-  const form = requests.find(r => r.options).options.body;
+  const form = requests.find(r => r.options?.method === 'POST').options.body;
   for (const field of ['temperature', 'humidity', 'soil_type', 'soil_condition', 'notes']) assert.equal(form.has(field), false);
   assert.equal(form.get('observed_timezone'), 'Asia/Kolkata (UTC+05:30)');
 });
@@ -96,5 +96,5 @@ for (const code of ['non_plant_image', 'plant_content_uncertain', 'plant_screeni
 test('suitability preview uses its own endpoint without predicting or saving', async () => {
   const { api, requests } = client(() => ({ ok: true, json: async () => ({ outcome: 'plant', message: 'Plant content supported' }) }));
   assert.equal((await api.checkSuitability({ uri: 'fixture-image' })).outcome, 'plant');
-  assert.deepEqual(requests.filter(r => r.options).map(r => r.url), ['http://test-only/check-plant-suitability']);
+  assert.deepEqual(requests.filter(r => r.options?.method === 'POST').map(r => r.url), ['http://test-only/check-plant-suitability']);
 });

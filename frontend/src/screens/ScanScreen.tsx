@@ -10,6 +10,12 @@ import { Icon } from '../components/Icon';
 export function ScanScreen({ j }: { j: Journal; }) {
   return <>
     <Title title="A new observation" subtitle="A photo today. A clearer history tomorrow." />
+    {j.draftAvailable&&!j.image&&<View style={s.card}>
+      <Text style={s.heading}>A draft is saved on this browser</Text>
+      <Button title="Restore saved draft" disabled={j.busy} onPress={() => void j.restoreDraft()} />
+      <Button title="Discard local recovery copy" secondary disabled={j.busy} onPress={j.forgetStoredDraft} />
+    </View>}
+    {!!j.draftMessage&&<Text accessibilityLiveRegion="polite" style={s.notice}>{j.draftMessage}</Text>}
     <Badge>{j.health?.capabilities.tomato_analysis? 'Tomato model available':'Photo record · analysis unavailable'}</Badge>
     <Text style={s.notice}>{j.health?.analysis_message||'Connect to the backend to check analysis availability.'}</Text>
     <Button title="Refresh connection and model status" secondary disabled={j.busy} onPress={() => void j.refresh()} />
@@ -34,7 +40,9 @@ export function ScanScreen({ j }: { j: Journal; }) {
         <Button title="Select from photos" secondary disabled={j.locked||!j.selected} onPress={() => void j.pick(false)} />
         <Text style={s.muted}>JPEG, PNG or WebP · up to 10 MB. Minimum 224 × 224 pixels; maximum 8192 per side and 24 MP.</Text>
         {j.image&&<Text style={s.notice}>Photo selected: {j.image.fileName||'Selected image'} · {j.validation?.is_valid? 'File validation passed':'File validation required'}</Text>}
-        {j.image&&<Button title="Check file and plant suitability" secondary disabled={j.locked} onPress={() => void j.validateImage()} />}
+        {j.image&&<Button title="Check file and plant suitability" secondary disabled={j.busy} onPress={() => void j.validateImage()} />}
+        {j.image&&j.draftRecoverySupported&&<Button title="Keep draft on this browser" secondary disabled={j.locked} onPress={() => void j.keepDraft()} />}
+        {j.draftRecoverySupported&&<Text style={s.muted}>Saving keeps a local photo and form recovery copy on this browser until the server confirms the save. Use one AgriSense tab; avoid shared devices. Browser data clearing removes this copy.</Text>}
         {j.validation&&!j.validation.is_valid&&<Text style={s.error}>Image rejected — file validation failed</Text>}
         {j.validation&&<Text style={j.validation.is_valid? s.notice:s.error}>{j.validation.message}</Text>}
         {j.image&&<View accessibilityLiveRegion="polite">
@@ -72,7 +80,7 @@ export function ScanScreen({ j }: { j: Journal; }) {
         <Button title={j.pendingId&&j.pendingAnalysis===false? 'Retry the same save':'Save observation without analysis'} disabled={j.recordBlockers.length>0} onPress={() => void j.saveRecord()} />
       </View>}
       {j.pendingId&&<View style={s.card}>
-        <Text style={s.notice}>The save may already have completed. Retry uses the same request ID. Keep this form open while checking history; drafts are not retained after an app restart.</Text>
+        <Text style={s.notice}>The save may already have completed. Retry uses the same request ID. {j.draftRecoverySupported? 'A recovery copy is kept on this browser. Restore it after reopening to check for a completed save.':'Keep this form open while checking history; native drafts are not retained after an app restart.'}</Text>
         <Button title="Check saved history" secondary disabled={j.busy} onPress={() => void j.openHistory('history')} />
         <Button title="Discard this form after checking history" secondary disabled={j.busy} onPress={j.clearDraft} />
         <Text style={s.muted}>Discarding the form does not delete any saved record.</Text>
