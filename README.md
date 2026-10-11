@@ -1,5 +1,8 @@
 # AgriSense — controlled tomato-model integration
 
+Current local readiness, reproducible checks, backup instructions, and remaining
+device/release blockers: [Phase 7B–7E report](docs/phase7-local-readiness.md).
+
 Expo + React Native + TypeScript, FastAPI, and SQLite. The app supports both
 record-only plant journaling and explicit tomato-leaf analysis using the evaluated
 Hybrid CNN–Transformer checkpoint. Historical mock observations remain labeled
@@ -95,7 +98,7 @@ cd /path/to/AgriSense
 # On this workstation model/.venv already contains the evaluated model runtime.
 # For a fresh checkout, create it first: python -m venv model/.venv
 model/.venv/bin/python -m pip install -r backend/requirements-inference.txt
-OMP_NUM_THREADS=4 model/.venv/bin/python -m uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --workers 1
+OMP_NUM_THREADS=4 model/.venv/bin/python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000 --workers 1 --no-access-log
 ```
 
 `AGRISENSE_CHECKPOINT_PATH` can override the artifact path; relative paths resolve
@@ -142,7 +145,19 @@ Scan the QR code with compatible Expo Go. `localhost` on a phone points to the p
 
 Camera capture requests permission on native devices. Browser camera/file behavior depends on browser support; photo selection is the reliable desktop path. Images must meet the format, file-size, resolution, and still-image limits above. Convert unsupported HEIC images before uploading if the native picker does not convert them.
 
-For a browser accessed through a LAN hostname/IP instead of localhost, set `AGRISENSE_CORS_ORIGINS` to that exact frontend origin before starting the backend, e.g. `http://192.168.1.10:8081`.
+For phone testing on a trusted private network, change the backend bind address to
+`--host 0.0.0.0`. There is no authentication: do not expose these ports publicly.
+For a browser accessed through a LAN hostname/IP instead of localhost, set
+`AGRISENSE_CORS_ORIGINS` to that exact frontend origin before starting the backend,
+e.g. `http://192.168.1.10:8081`. Browser writes from other origins are rejected;
+this is not authentication for native clients or other network callers.
+
+Browser drafts can retain the photo, form and retry identity in IndexedDB. Use
+one app tab and avoid shared devices. Saving creates a recovery copy before
+transmission; explicit **Keep draft on this browser** retains unfinished forms.
+After reopening, use **Restore saved draft** on Scan. Storage failure prevents
+submission instead of silently losing retry identity. Native app restart recovery
+is not implemented: keep an uncertain native save open and check history.
 
 ## Record-only walkthrough
 
@@ -253,16 +268,17 @@ Upload examples (replace the plant ID and image path):
 ```bash
 curl http://localhost:8000/health
 curl -X POST http://localhost:8000/plants \
-  -H 'Content-Type: application/json' -d '{"name":"Tomato"}'
+  -H 'Content-Type: application/json' -d '{"name":"Tomato","crop_name":"tomato"}'
 curl -X POST http://localhost:8000/validate-image -F 'image=@/absolute/path/leaf.jpg'
 curl -X POST http://localhost:8000/predict -F 'image=@/absolute/path/leaf.jpg'
 curl -X POST http://localhost:8000/plants/PLANT_ID/observations \
   -F 'image=@/absolute/path/leaf.jpg' \
+  -F 'request_id=manual-example-001' \
   -F 'temperature=27' -F 'humidity=65' \
   -F 'soil_type=Loamy' -F 'soil_condition=Normal'
 ```
 
-## Structure and replacing the mock
+## Structure and predictor integration
 
 - `frontend/App.tsx`: simple state-based screens and shared UI components.
 - `frontend/src/api.ts`: typed API client and native/browser multipart handling.
@@ -276,7 +292,11 @@ curl -X POST http://localhost:8000/plants/PLANT_ID/observations \
 - `backend/app/prediction.py`: `Predictor` interface, response schema, development mock.
 - `backend/tests/test_api.py`: isolated integration tests using temporary databases/uploads.
 
-To add the trained Hybrid CNN-Transformer later, implement `predict(image: bytes) -> Prediction` and inject that implementation through `create_app(predictor=...)`. Image decoding/preprocessing/inference belong inside that service. Preserve response names and 0–100 units, set `is_mock=False`, and identify the model in `predictor`. The existing image-only adapter contract is preserved. Phase 5 capability flags deliberately keep validated analysis disabled, including for injected custom predictors; explicit evaluation/approval and a later integration change are required to enable a model workflow. The current UI remains record-only and reads each record’s analysis status and provenance. Keep weights outside Git. Environmental fields remain outside this interface.
+`TrainedTomatoPredictor` implements `predict(image: bytes) -> Prediction` and is
+loaded by the default app. It receives image bytes only. Checkpoint and suitability
+readiness jointly control tomato analysis. Mock injection is reserved for tests;
+the default application never substitutes mock predictions for a failed model.
+Keep weights outside Git and environmental context outside the predictor interface.
 
 ## Checks
 
@@ -298,6 +318,10 @@ Nothing is deployed. `.env`, virtual environments, node_modules, uploads, SQLite
 Expo image-picker setup follows the [official Expo documentation](https://docs.expo.dev/versions/latest/sdk/imagepicker/).
 
 ## Phase 2B — prepared model pipeline (not trained)
+
+**Historical phase notes below:** statements about future training, absent reports,
+mock defaults and missing suitability screening describe those earlier phases.
+They are superseded by the current integration and Phase 7 instructions above.
 
 Phase 2B adds runnable **code** for dataset preparation, training, validation, evaluation, and inference. No real dataset, trained weights, accuracy, or model performance results are included. The small tensors/images used by automated tests are temporary software fixtures, not a research dataset. Tests perform no optimizer updates and do not produce completed-training checkpoints.
 
@@ -586,4 +610,5 @@ Phase 2B verification: 22 model tests and 32 backend tests passed; model/backend
 
 Phase 2A passed 29 backend tests, Python dependency checks, TypeScript checking, Expo dependency compatibility checking, and Expo web, Android, and iOS bundling. Native camera interaction and the full UI flow still require a device/browser walkthrough; bundle checks are not end-to-end UI tests. TestClient needed to run outside this workstation’s restricted sandbox because its event-loop thread stalled inside it. Two upstream Starlette test-client deprecation warnings are non-failing.
 
-`npm audit` reports 10 moderate findings in the Expo tooling dependency chain, rooted in the transitive `uuid` package used by `xcode`. Its suggested automatic fix downgrades Expo to SDK 46, so it was not applied. There are no high or critical findings in that audit. Recheck upstream dependency updates before a later production phase.
+The historical npm audit reported 10 moderate findings. See the Phase 7 report for
+the current advisory check; the old result is not a current security clearance.
