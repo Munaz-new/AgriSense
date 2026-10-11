@@ -86,7 +86,8 @@ def test_invalid_optional_context_never_persists(journal, fields):
 
 
 def test_optional_context_nulls_survive_restart(journal):
-    first = submit(journal).json()
+    first = submit_optional_context(journal, 'restart-with-nulls', {}).json()
+    assert all(first[key] is None for key in ('temperature', 'humidity', 'soil_type'))
     with TestClient(create_app(journal[3], journal[4], journal[5])) as restarted:
         assert restarted.get(f'/plants/{journal[1]}/observations').json() == [first]
 

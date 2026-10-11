@@ -180,7 +180,8 @@ def test_screening_failure_logs_error_and_never_classifies_or_saves(tmp_path, ca
         assert predictor.calls == 0
         assert client.get(f'/plants/{plant}/observations').json() == []
         assert list((tmp_path/'uploads').iterdir()) == []
-    assert 'private verifier failure' in caplog.text
+    assert 'Plant-content screening failed: RuntimeError' in caplog.text
+    assert 'private verifier failure' not in caplog.text
 
 
 def test_injected_real_predictor_cannot_bypass_missing_screening(tmp_path, monkeypatch):

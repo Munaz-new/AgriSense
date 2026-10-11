@@ -77,7 +77,7 @@ class PlantContentVerifier:
                 raise RuntimeError("Plant-content screening produced invalid text features.")
         self._positive_count = len(self.PLANT_PROMPTS)
         self.weights_path = weights_path.resolve()
-        logging.getLogger(__name__).info("Plant suitability ViT-B-32 OpenAI weights loaded from %s", self.weights_path)
+        logging.getLogger(__name__).info('Plant suitability ViT-B-32 OpenAI weights loaded locally')
 
     @staticmethod
     def _find_cached_weights() -> Path | None:

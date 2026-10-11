@@ -20,6 +20,8 @@ from .prediction import MockPredictor, Prediction, PredictionUnavailableError, P
 from .image_validation import (MAX_IMAGE_BYTES, PlantImageValidator, TechnicalPlantImageValidator,
                                ValidationResult, image_extension)
 from .plant_suitability import PlantContentVerifier, Suitability
+from .startup import startup_stage
+from .request_limits import LocalRequestBoundary
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -99,26 +101,34 @@ def create_app(database_path: Path | None = None, upload_dir: Path | None = None
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         nonlocal predictor, plant_verifier
-        initialize(database_path)
+        with startup_stage('database'):
+            initialize(database_path)
         if predictor is None:
             try:
-                predictor = await run_in_threadpool(TrainedTomatoPredictor, configured_checkpoint)
+                with startup_stage('tomato_checkpoint'):
+                    predictor = await run_in_threadpool(TrainedTomatoPredictor, configured_checkpoint)
             except Exception:
-                logging.getLogger(__name__).exception("Tomato model unavailable at startup")
+                logging.getLogger('uvicorn.error').warning('Tomato analysis unavailable; record-only saving remains enabled.')
         if plant_verifier is None and isinstance(predictor, TrainedTomatoPredictor):
             try:
-                plant_verifier = await run_in_threadpool(PlantContentVerifier)
+                with startup_stage('plant_suitability'):
+                    plant_verifier = await run_in_threadpool(PlantContentVerifier)
             except Exception:
-                logging.getLogger(__name__).exception("Plant-content screening unavailable at startup")
+                logging.getLogger('uvicorn.error').warning('Plant screening unavailable; tomato analysis remains disabled.')
         app.state.predictor = predictor
         app.state.plant_verifier = plant_verifier
+        logging.getLogger('uvicorn.error').info('AgriSense startup state=ready record_only=true tomato_analysis=%s',
+                                              isinstance(predictor, TrainedTomatoPredictor) and plant_verifier is not None)
         yield
 
     app = FastAPI(title="AgriSense Phase 5", lifespan=lifespan,
                   description="Local plant observation journal. Record-only saving requires no model.")
+    origins = [origin.strip() for origin in os.getenv(
+        'AGRISENSE_CORS_ORIGINS', 'http://localhost:8081,http://127.0.0.1:8081').split(',') if origin.strip()]
+    app.add_middleware(LocalRequestBoundary, allowed_origins=origins)
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=os.getenv("AGRISENSE_CORS_ORIGINS", "http://localhost:8081,http://127.0.0.1:8081").split(","),
+        allow_origins=origins,
         allow_methods=["GET", "POST"], allow_headers=["Content-Type"],
     )
     app.mount("/uploads", StaticFiles(directory=upload_dir), name="uploads")
@@ -189,7 +199,7 @@ def create_app(database_path: Path | None = None, upload_dir: Path | None = None
         try:
             suitability = plant_verifier.verify(data)
         except Exception as error:
-            logging.getLogger(__name__).exception("Plant-content screening failed during request")
+            logging.getLogger(__name__).error('Plant-content screening failed: %s', type(error).__name__)
             raise PredictionUnavailableError('Plant-content screening failed') from error
         if suitability.outcome == Suitability.NON_PLANT:
             raise HTTPException(422, detail={"code": "non_plant_image", "message": suitability.message})
