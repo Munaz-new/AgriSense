@@ -192,9 +192,9 @@ older records with unknown image hashes are not retroactively matched.
 `tracking_ref` (up to 100 characters), and `notes` (up to 2,000 characters). Required
 `request_id` is 8–100 ASCII letters/digits/underscores/hyphens. A new record returns
 201; a same-content retry for the same plant/request ID returns 200 with the original
-record; different content with that ID returns 409. No client-supplied prediction
-fields are persisted. The existing analyzed-save endpoint retains its previous
-behavior and does not gain retry protection in this phase.
+record; different content with that ID returns 409. This idempotency applies to both
+record-only and analyzed saves; a successful analyzed retry does not rerun inference.
+No client-supplied prediction fields are persisted.
 
 Record responses add `analysis_status`, optional observation/provenance metadata,
 `request_id`, `image_sha256`, and `duplicate_of`. `not_requested` guarantees null
