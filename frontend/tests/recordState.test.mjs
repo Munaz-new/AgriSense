@@ -101,4 +101,9 @@ test('button gates preserve crop, image, readiness, context and retry safety', a
     assert.ok(scanBlockers({ ...valid, ...patch }, true).length, JSON.stringify(patch));
   }
   assert.deepEqual(scanBlockers({ ...valid, selected: { crop_name: 'potato' }, health: { capabilities: { tomato_analysis: false, record_only: true } } }, false), []);
+  const recordOnly = { ...valid, temperature: '', humidity: '', soilType: '' };
+  assert.deepEqual(scanBlockers(recordOnly, false), []);
+  for (const patch of [{ temperature: '-50.1' }, { temperature: '70.1' }, { temperature: 'NaN' }, { humidity: '-0.1' }, { humidity: '100.1' }, { humidity: 'Infinity' }, { soilType: 'x'.repeat(101) }]) {
+    assert.ok(scanBlockers({ ...recordOnly, ...patch }, false).length, JSON.stringify(patch));
+  }
 });

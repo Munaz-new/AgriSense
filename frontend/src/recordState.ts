@@ -79,9 +79,9 @@ export function scanBlockers(state: {
   if (!state.image) reasons.push('Select a real photo.');
   else if (!state.validation?.is_valid) reasons.push('Validate the selected image successfully.');
   if (analyze && state.suitability?.status !== 'accepted') reasons.push('Plant suitability must be accepted before disease analysis. Check the selected photo.');
-  if ((!analyze || state.temperature.trim()) && ( !Number.isFinite(Number(state.temperature)) || Number(state.temperature) < -50 || Number(state.temperature) > 70 || !state.temperature.trim())) reasons.push('Enter measured temperature between -50 and 70°C.');
-  if ((!analyze || state.humidity.trim()) && ( !Number.isFinite(Number(state.humidity)) || Number(state.humidity) < 0 || Number(state.humidity) > 100 || !state.humidity.trim())) reasons.push('Enter measured humidity between 0 and 100%.');
-  if ((!analyze && !state.soilType.trim()) || state.soilType.trim().length > 100) reasons.push('Enter soil type (up to 100 characters).');
+  if (state.temperature.trim() && (!Number.isFinite(Number(state.temperature)) || Number(state.temperature) < -50 || Number(state.temperature) > 70)) reasons.push('Temperature must be between -50 and 70°C.');
+  if (state.humidity.trim() && (!Number.isFinite(Number(state.humidity)) || Number(state.humidity) < 0 || Number(state.humidity) > 100)) reasons.push('Humidity must be between 0 and 100%.');
+  if (state.soilType.trim().length > 100) reasons.push('Soil type must be 100 characters or fewer.');
   if ((!analyze || state.condition) && !['Dry', 'Normal', 'Wet'].includes(state.condition)) reasons.push('Select the observed soil condition.');
   return reasons;
 }

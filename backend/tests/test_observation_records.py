@@ -33,6 +33,12 @@ def submit(journal, key='request-001', **overrides):
     return client.post(f'/plants/{plant_id}/records', data=fields, files={'image': ('fixture.png', image)})
 
 
+def submit_optional_context(journal, key, fields):
+    client, plant_id, image, *_ = journal
+    payload = {'request_id': key, 'soil_condition': 'Normal', **fields}
+    return client.post(f'/plants/{plant_id}/records', data=payload, files={'image': ('fixture.png', image)})
+
+
 def test_record_only_roundtrip_capabilities_and_nulls(journal):
     client, plant_id, _, path, uploads, _ = journal
     capabilities = client.get('/health').json()['capabilities']
@@ -52,6 +58,37 @@ def test_record_only_roundtrip_capabilities_and_nulls(journal):
     assert len(list(uploads.iterdir())) == 1
     with connect(path) as db:
         assert db.execute('PRAGMA foreign_key_check').fetchall() == []
+
+
+@pytest.mark.parametrize('fields, expected', [
+    ({}, {'temperature': None, 'humidity': None, 'soil_type': None}),
+    ({'temperature': '21.5'}, {'temperature': 21.5, 'humidity': None, 'soil_type': None}),
+    ({'humidity': '0'}, {'temperature': None, 'humidity': 0.0, 'soil_type': None}),
+    ({'soil_type': '  Sandy loam  '}, {'temperature': None, 'humidity': None, 'soil_type': 'Sandy loam'}),
+])
+def test_record_only_context_fields_are_independently_optional(journal, fields, expected):
+    response = submit_optional_context(journal, 'optional-context', fields)
+    assert response.status_code == 201
+    row = response.json()
+    assert {key: row[key] for key in expected} == expected
+    assert journal[0].get(f'/plants/{journal[1]}/observations').json() == [row]
+
+
+@pytest.mark.parametrize('fields', [
+    {'temperature': '-50.1'}, {'temperature': '70.1'}, {'temperature': 'nan'},
+    {'temperature': 'inf'}, {'humidity': '-0.1'}, {'humidity': '100.1'},
+    {'humidity': 'nan'}, {'soil_type': '   '}, {'soil_type': 'x' * 101},
+])
+def test_invalid_optional_context_never_persists(journal, fields):
+    assert submit_optional_context(journal, 'invalid-context', fields).status_code == 422
+    assert journal[0].get(f'/plants/{journal[1]}/observations').json() == []
+    assert list(journal[4].iterdir()) == []
+
+
+def test_optional_context_nulls_survive_restart(journal):
+    first = submit(journal).json()
+    with TestClient(create_app(journal[3], journal[4], journal[5])) as restarted:
+        assert restarted.get(f'/plants/{journal[1]}/observations').json() == [first]
 
 
 def test_replay_and_changed_payload_conflict(journal):

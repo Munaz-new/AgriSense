@@ -238,18 +238,21 @@ def create_app(database_path: Path | None = None, upload_dir: Path | None = None
         plant_id: str, response: Response,
         image: Annotated[UploadFile, File()],
         request_id: Annotated[str, Form(min_length=8, max_length=100, pattern=r'^[A-Za-z0-9_-]+$')],
-        temperature: Annotated[float, Form(ge=-50, le=70, allow_inf_nan=False)],
-        humidity: Annotated[float, Form(ge=0, le=100, allow_inf_nan=False)],
-        soil_type: Annotated[str, Form(min_length=1, max_length=100)],
         soil_condition: Annotated[Literal['Dry', 'Normal', 'Wet'], Form()],
+        # Manually recorded context only; it is not sent to the disease model.
+        # Supported temperature range is -50 to 70 °C, suitable for realistic
+        # outdoor/greenhouse observations while rejecting likely unit mistakes.
+        temperature: Annotated[float | None, Form(ge=-50, le=70, allow_inf_nan=False)] = None,
+        humidity: Annotated[float | None, Form(ge=0, le=100, allow_inf_nan=False)] = None,
+        soil_type: Annotated[str | None, Form(min_length=1, max_length=100)] = None,
         observed_at: Annotated[datetime | None, Form()] = None,
         observed_timezone: Annotated[str | None, Form(max_length=100)] = None,
         tracking_ref: Annotated[str | None, Form(max_length=100)] = None,
         notes: Annotated[str | None, Form(max_length=2000)] = None,
     ):
         require_plant(plant_id)
-        soil_type = soil_type.strip()
-        if not soil_type:
+        soil_type = soil_type.strip() if soil_type is not None else None
+        if soil_type == "":
             raise HTTPException(422, 'Soil type cannot be blank.')
         if observed_at is not None and (observed_at.tzinfo is None or observed_at > datetime.now(timezone.utc)):
             raise HTTPException(422, 'Observation time must include a timezone and must not be in the future.')

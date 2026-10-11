@@ -52,10 +52,10 @@ export function ScanScreen({ j }: { j: Journal; }) {
       {j.validation?.is_valid&&<View style={s.card}>
         <Text style={s.eyebrow}>02 / Field context</Text>
         <Text style={s.heading}>What did you observe?</Text>
-        <Text style={s.muted}>Environmental details are optional for image analysis and are never model inputs. Enter only measured or observed values. Record-only saving still requires these fields.</Text>
-        <Field label="Temperature (°C)" numeric disabled={j.locked} value={j.temperature} setValue={j.setTemperature} />
-        <Field label="Humidity (%)" numeric disabled={j.locked} value={j.humidity} setValue={j.setHumidity} />
-        <Field label="Soil type" disabled={j.locked} value={j.soilType} setValue={j.setSoilType} />
+        <Text style={s.muted}>Optional, manually entered context only; these values are never model inputs. Enter only measured or observed values. Temperature supports -50 to 70°C; humidity supports 0 to 100%.</Text>
+        <Field label="Temperature (°C, optional)" numeric disabled={j.locked} value={j.temperature} setValue={j.setTemperature} />
+        <Field label="Humidity (%, optional)" numeric disabled={j.locked} value={j.humidity} setValue={j.setHumidity} />
+        <Field label="Soil type (optional, up to 100 characters)" disabled={j.locked} value={j.soilType} setValue={j.setSoilType} />
         <Text style={s.label}>Soil condition</Text>
         <View style={s.wrap}>{(['Dry','Normal','Wet'] as SoilCondition[]).map(value => <Button key={value} title={value} secondary={j.condition!==value} disabled={j.locked} onPress={() => j.setCondition(value)} />)}</View>
         <Text style={s.label}>Observation time (automatic)</Text>

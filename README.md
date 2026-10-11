@@ -75,7 +75,7 @@ Technical file validation only confirms that the upload decodes as a supported, 
 
 The suitability weights must be available locally for analysis to be ready. By default the app reads the OpenAI ViT-B/32 weights from the local Hugging Face cache; `AGRISENSE_PLANT_VERIFIER_WEIGHTS` can point to a compatible local OpenCLIP state file. Startup does not download or substitute weights. Health reports plant-content screening readiness separately from technical validation and tomato checkpoint readiness. Treatment guidance remains separate from both image checks and classifier scores.
 
-`PlantImageValidator.validate(image: bytes) -> ValidationResult` remains the technical file-validation boundary. Suitability screening is a separate `PlantContentVerifier` step, so a technical pass never means that the image contains a leaf or that disease analysis succeeded. Scan shows file validation, suitability acceptance/rejection, and disease completion separately. Selecting another photo clears previous checks and results. Explicit image rejection unlocks replacement; ambiguous network/save failures retain the request identity for safe retries. Record-only saving still requires environmental fields and makes no semantic claim.
+`PlantImageValidator.validate(image: bytes) -> ValidationResult` remains the technical file-validation boundary. Suitability screening is a separate `PlantContentVerifier` step, so a technical pass never means that the image contains a leaf or that disease analysis succeeded. Scan shows file validation, suitability acceptance/rejection, and disease completion separately. Selecting another photo clears previous checks and results. Explicit image rejection unlocks replacement; ambiguous network/save failures retain the request identity for safe retries. Record-only saving allows temperature (-50 to 70 °C), relative humidity (0 to 100%), and soil type (up to 100 characters) to be entered independently or left blank. These are manually entered context only; missing values remain null.
 
 Every prediction request and save request revalidates its own image bytes. Calling `/predict` or the observation endpoint directly cannot skip validation. A failed validation returns an API error before prediction, image storage, or observation insertion. The validation endpoint itself never predicts or persists anything.
 
@@ -151,8 +151,10 @@ For a browser accessed through a LAN hostname/IP instead of localhost, set `AGRI
 2. Choose **New observation**, select/capture a photo, and **Check file and plant suitability**.
    Record-only saving requires file validation; suitability acceptance is required
    only for **Analyze tomato leaf and save**, which checks suitability again.
-3. Enter temperature, humidity, soil type and soil condition for record-only saving;
-   these fields are optional for analysis. Photo selection captures observation
+3. Temperature, humidity, and soil type are optional and independently recorded;
+   their supported ranges are -50 to 70 °C, 0 to 100%, and up to 100 characters.
+   Soil condition remains required. These values are manually entered context only,
+   not model inputs. Photo selection captures observation
    time/timezone automatically, separately from server save time. Leaf/site reference
    and notes are optional. The API still accepts unknown observation time as null.
 4. Choose **Save observation without analysis**. No predictor is called. Disease,
@@ -182,13 +184,14 @@ older records with unknown image hashes are not retroactively matched.
 | GET | `/plants/{plant_id}` | One plant, or 404 |
 | POST | `/plants/{plant_id}/observations` | Multipart `image`, `temperature`, `humidity`, `soil_type`, `soil_condition`; revalidates, predicts, and saves; existing Phase 1 contract retained |
 | GET | `/plants/{plant_id}/observations` | All records, oldest first by observed time with save-time fallback; unknown plant returns 404 |
-| POST | `/plants/{plant_id}/records` | Validated record-only save; image, environmental fields and request ID required; no predictor call |
+| POST | `/plants/{plant_id}/records` | Validated record-only save; image and request ID required; temperature (-50 to 70 °C), humidity (0 to 100%) and soil type (up to 100 characters) independently optional; soil condition required; no predictor call |
 | GET | `/plants/{plant_id}/progression` | Optional `tracking_ref`; explicit comparison availability and reason; no policy enabled |
 | POST | `/validate-image` | Multipart `image` only; technical validation, no prediction or persistence |
 | POST | `/check-plant-suitability` | Multipart `image`; technical checks then plant screening, no disease prediction or persistence. Analysis screens the bytes again. |
 | POST | `/predict` | Multipart `image` only; revalidate and preview prediction without saving an image or observation |
 
-`POST /records` also accepts optional `observed_at` (timezone required, not future),
+`POST /records` also accepts optional `temperature`, `humidity`, `soil_type`,
+`observed_at` (timezone required, not future),
 `tracking_ref` (up to 100 characters), and `notes` (up to 2,000 characters). Required
 `request_id` is 8–100 ASCII letters/digits/underscores/hyphens. A new record returns
 201; a same-content retry for the same plant/request ID returns 200 with the original
