@@ -2,21 +2,27 @@
 
 Run from the repository root with model/.venv/bin/python -m backend.smoke_local --real-model.
 Without --real-model, deliberately missing weights exercise record-only availability.
+Both modes verify an isolated backup restore; --extra-records adds a bounded journal check.
 No mock predictor or suitability substitute is installed by this harness.
 """
 import argparse
 from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import os
 from pathlib import Path
 import socket
+import sqlite3
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
 import time
+from zipfile import ZipFile
 
 import httpx
+
+from .backup import backup
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -62,7 +68,65 @@ def server(storage, real_model, timeout):
         print(log_path.read_text(), flush=True)
 
 
-def run(real_model=False, startup_timeout=60):
+def check_backup_restore(storage, plant, history, leaf, fields, startup_timeout):
+    """Restore only this run's generated archive into a new disposable directory.
+
+    This is an integration check, not an importer for user-supplied archives.
+    """
+    def source_hashes():
+        return {str(path.relative_to(storage)): hashlib.sha256(path.read_bytes()).hexdigest()
+                for path in [storage/'journal.db', *sorted((storage/'uploads').iterdir())]}
+
+    before = source_hashes()
+    bundle = storage/'private-backup.zip'
+    summary = backup(storage/'journal.db', storage/'uploads', bundle)
+    assert summary['plants'] == 1 and summary['observations'] == len(history)
+    assert bundle.stat().st_mode & 0o777 == 0o600
+    restored = storage/'isolated-restore'
+    restored.mkdir(mode=0o700)
+    (restored/'uploads').mkdir(mode=0o700)
+    names = {'journal.sqlite', 'records.json', *(row['image_path'].lstrip('/') for row in history)}
+    with ZipFile(bundle) as archive:
+        assert set(archive.namelist()) == names | {'manifest.json'}
+        assert len(archive.namelist()) == len(names) + 1
+        manifest = json.loads(archive.read('manifest.json'))
+        assert manifest['format'] == 'agrisense-backup-v1'
+        assert set(manifest['sha256']) == names
+        for name in names:
+            data = archive.read(name)
+            assert hashlib.sha256(data).hexdigest() == manifest['sha256'][name]
+        # Fixed database destination and photo basenames; never extractall().
+        (restored/'journal.db').write_bytes(archive.read('journal.sqlite'))
+        for row in history:
+            name = row['image_path'].split('/')[-1]
+            with (restored/'uploads'/name).open('xb') as photo:
+                photo.write(archive.read('uploads/' + name))
+    with sqlite3.connect(restored/'journal.db') as connection:
+        assert connection.execute('PRAGMA integrity_check').fetchone()[0] == 'ok'
+        assert connection.execute('PRAGMA foreign_key_check').fetchall() == []
+        assert connection.execute('SELECT COUNT(*) FROM observations').fetchone()[0] == len(history)
+    with server(restored, False, startup_timeout) as client:
+        assert client.get('/plants').json() == [plant]
+        route = f"/plants/{plant['id']}"
+        assert client.get(route + '/observations').json() == history
+        for row in history:
+            response = client.get(row['image_path'])
+            assert response.status_code == 200 and response.content == leaf
+        replay = client.post(route + '/records', data=fields,
+                             files={'image': ('fixture.jpg', leaf, 'image/jpeg')})
+        assert replay.status_code == 200 and replay.json() == history[0]
+        conflict = client.post(route + '/records', data={**fields, 'humidity': '25'},
+                               files={'image': ('fixture.jpg', leaf, 'image/jpeg')})
+        assert conflict.status_code == 409
+        assert client.get(route + '/observations').json() == history
+    assert source_hashes() == before
+    return {'status': 'PASS', 'observations': len(history), 'images': len(history),
+            'source_unchanged': True, 'retry_identity_preserved': True}
+
+
+def run(real_model=False, startup_timeout=60, extra_records=0):
+    if not 0 <= extra_records <= 1000:
+        raise ValueError('extra_records must be between 0 and 1000')
     # asyncio uses this mechanism to receive worker completion notifications.
     a, b = socket.socketpair()
     try:
@@ -88,7 +152,8 @@ def run(real_model=False, startup_timeout=60):
             results['browser_origin_api_headers'] = 'PASS'
             response = client.post('/plants', json={'name': 'Disposable smoke plant', 'crop_name': 'tomato'})
             assert response.status_code == 201
-            plant = response.json()['id']
+            plant_record = response.json()
+            plant = plant_record['id']
             route = f'/plants/{plant}/records'
             def post(path, fields=None, image=leaf):
                 return client.post(path, data=fields or {}, files={'image': ('fixture.jpg', image, 'image/jpeg')})
@@ -112,6 +177,24 @@ def run(real_model=False, startup_timeout=60):
             assert second['duplicate_of'] == first['id']
             assert post(route, {**fields, 'request_id': 'invalid-record-1', 'humidity': '101'}).status_code == 422
             results['records_context_nulls_retry_conflict'] = 'PASS'
+            expected = [first, second]
+            if extra_records:
+                started = time.monotonic()
+                for index in range(extra_records):
+                    timestamp = datetime(2025, 1, 3, tzinfo=timezone.utc) + timedelta(seconds=index)
+                    response = post(route, {'request_id': f'smoke-load-{index:04d}',
+                                            'soil_condition': 'Normal',
+                                            'observed_at': timestamp.isoformat()})
+                    assert response.status_code == 201, (index, response.status_code, response.text)
+                    row = response.json()
+                    assert row['duplicate_of'] == first['id']
+                    assert row['analysis_status'] == 'not_requested'
+                    assert all(row[key] is None for key in ('temperature', 'humidity', 'soil_type', 'disease', 'severity'))
+                    expected.append(row)
+                results['bounded_journal_writes'] = {
+                    'status': 'PASS', 'extra_records': extra_records,
+                    'elapsed_seconds': round(time.monotonic() - started, 3),
+                }
             if real_model:
                 assert post('/check-plant-suitability').status_code == 200
                 rejected = post('/check-plant-suitability', image=logo)
@@ -119,6 +202,7 @@ def run(real_model=False, startup_timeout=60):
                 response = post(f'/plants/{plant}/observations', {'request_id': 'smoke-analysis-1'})
                 assert response.status_code == 201, response.text
                 result = response.json()
+                expected.append(result)
                 assert result['analysis_status'] == 'completed' and result['is_mock'] is False
                 assert result['severity'] is None and 0 <= result['prediction_score'] <= 100
                 digest = hashlib.sha256((ROOT/'model/checkpoints/tomato_gpu_epoch5_retry2/best.pt').read_bytes()).hexdigest()
@@ -131,9 +215,16 @@ def run(real_model=False, startup_timeout=60):
                 assert post('/predict').status_code == 503
                 assert post('/check-plant-suitability').status_code == 503
                 results['honest_analysis_unavailable'] = 'PASS'
-            history = client.get(f'/plants/{plant}/observations').json()
-            assert len(history) == (3 if real_model else 2)
-            assert history[:2] == [first, second]
+            started = time.monotonic()
+            response = client.get(f'/plants/{plant}/observations')
+            assert response.status_code == 200
+            history = response.json()
+            assert history == sorted(expected, key=lambda row: (row['observed_at'] or row['created_at'], row['created_at'], row['id']))
+            assert len({row['request_id'] for row in history}) == len(expected)
+            results['journal_history'] = {
+                'status': 'PASS', 'observations': len(history), 'response_bytes': len(response.content),
+                'elapsed_seconds': round(time.monotonic() - started, 3),
+            }
             assert client.get(first['image_path']).content == leaf
             progress = client.get(f'/plants/{plant}/progression').json()
             assert progress['status'] == 'unavailable' and progress['delta'] is None
@@ -141,6 +232,8 @@ def run(real_model=False, startup_timeout=60):
         with server(storage, False, startup_timeout) as client:
             assert client.get(f'/plants/{plant}/observations').json() == history
             results['persistence_after_process_restart'] = 'PASS'
+        results['isolated_backup_restore'] = check_backup_restore(
+            storage, plant_record, history, leaf, fields, startup_timeout)
     print(json.dumps(results, indent=2), flush=True)
 
 
@@ -148,7 +241,11 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--real-model', action='store_true')
     parser.add_argument('--startup-timeout', type=int, default=60)
+    parser.add_argument('--extra-records', type=int, default=0,
+                        help='Create 0–1000 additional disposable record-only observations for a bounded journal check.')
     args = parser.parse_args()
     if not 1 <= args.startup_timeout <= 300:
         parser.error('--startup-timeout must be between 1 and 300 seconds')
-    run(args.real_model, args.startup_timeout)
+    if not 0 <= args.extra_records <= 1000:
+        parser.error('--extra-records must be between 0 and 1000')
+    run(args.real_model, args.startup_timeout, args.extra_records)

@@ -55,6 +55,8 @@ From the repository root (use a normal terminal permitting local sockets):
 ```bash
 # Real HTTP requests, existing checkpoint, disposable SQLite/uploads, restart check.
 timeout 180s model/.venv/bin/python -u -m backend.smoke_local --real-model --startup-timeout 60
+# Optional bounded journal check; also verifies an isolated backup restore over HTTP.
+timeout 180s model/.venv/bin/python -u -m backend.smoke_local --real-model --startup-timeout 60 --extra-records 1000
 # Omit --real-model to deliberately test missing-model record-only availability.
 cd backend
 timeout 180s env OMP_NUM_THREADS=4 ../model/.venv/bin/python -m pytest -q -rs
@@ -91,7 +93,8 @@ it contains no credentials. Phone localhost is not the development computer.
 | Loading, errors, retry | PASS within tested scope | Hook/transport regression checks plus actual Chrome backend-stop error and Reconnect button |
 | Browser draft storage/recovery | PASS automated contracts; NOT TESTED actual browser reload | Blob/identity storage double and hook tests; browser upload restriction blocked complete walkthrough |
 | Responsive UI | PASS limited inspection | Chrome home/history at 390 × 844, readable controls/navigation; not a phone or exhaustive accessibility test |
-| Backup/export integrity | PASS automated | Temporary SQLite snapshot, images and inventory hashes, null fields, permissions, refusal cases |
+| Backup/export integrity | PASS automated | Temporary SQLite snapshot, images and inventory hashes, null fields, permissions, refusal cases; continuation verified isolated restore over real HTTP |
+| Bounded journal load | PASS backend only | Continuation verified 1,003 observations for one plant; browser/device rendering and broader load remain untested |
 
 Actual smoke fixture output was `Bacterial_spot`, score `99.65035915374756`,
 severity null. This is an observed output for a committed integration fixture,
@@ -103,8 +106,9 @@ passed. Exports produce bundles, not signed installable applications. Non-failin
 warnings: Node typeless test-module detection, bundler color environment conflict,
 pip cache unwritable. Offline Expo dependency compatibility check reported up to
 date but explicitly warned that offline validation is unreliable. Fresh install,
-Python vulnerability audit, native builds, device lifecycle/performance and
-large-journal load tests were not performed.
+Python vulnerability audit, native builds and device lifecycle/performance were
+not performed. The continuation below adds a bounded backend journal check;
+browser rendering, multiple-plant load and concurrency remain untested.
 
 Chrome file-upload continuation requires enabling **Allow access to file URLs**
 in the ChatGPT extension details (`chrome://extensions`). Then rerun the full
@@ -175,7 +179,8 @@ verify manifest hashes, extract into a **new isolated directory**, run SQLite
 integrity/foreign-key checks, point test environment variables at that directory,
 and verify counts/images/history before deciding to switch the real service.
 Do not overwrite the live database or merge databases. Tests reconstructed an
-isolated SQLite copy; no actual user backup/restore was performed. User-facing
+isolated SQLite copy; the continuation below also served restored fixture records
+and images through the real API. No actual user backup/restore was performed. User-facing
 selective deletion, retention policy, automated restore and secure erasure remain
 unimplemented. No real records were deleted.
 
@@ -240,3 +245,69 @@ The next device-focused feature is durable native draft recovery, followed by a
 physical-device end-to-end run. Public release additionally needs reviewed access
 control/deployment design, dependency remediation and evidence appropriate to any
 agricultural claims. Do not interpret test counts as approval for such claims.
+
+## Interrupted-task continuation — 2026-10-11
+
+The repository was inspected before changes. Local `main` and `origin/main` were
+both `2d14dbe29a876f49cd3111b28169f56a0a994005`. A fresh, read-only
+`git ls-remote --heads origin main` returned that exact hash, confirming that
+`948865a`, `8614cf8`, `4823f7d` and `2d14dbe` had already been pushed. No completed
+implementation was redone. Existing untracked research artifacts were left alone.
+
+Verification reran the backend suite (**140 passed**, 17.54 s), model suite
+(**118 passed**, 3.68 s), frontend suite (**52 passed**) and TypeScript check;
+all succeeded without skipped tests. The real-model smoke test also passed before
+extending it. Sandbox socketpair `EPERM` reproduced the documented environment
+restriction; approved execution with local sockets completed startup and clean
+shutdown. On that verification run database/checkpoint/suitability initialization
+took 0.001 / 1.316 / 3.687 s. The missing-checkpoint restart correctly exposed
+record-only mode. No startup workaround or model substitution was introduced.
+
+Only the unfinished bounded-journal and restore integration checks were extended
+in `backend/smoke_local.py`:
+
+- `--extra-records` accepts 0–1000 disposable record-only submissions. The executed
+  real-model run added 1,000 in 4.101 s and retrieved **1,003 observations** in
+  0.028 s (809,511 response bytes). Ordered history, unique request IDs, duplicate
+  photo flags, null optional context and missing severity matched expected values.
+- Both default and real-model modes now back up their temporary journal after
+  stopping the source server, validate every manifest hash and SQLite integrity /
+  foreign keys, and reconstruct into a new temporary directory. A third real
+  uvicorn process serves the restored plant, exact history and every uploaded
+  image. Existing request replay returns the same row (200), changed replay is
+  rejected (409), and history remains unchanged. Source database/photo hashes
+  match before and after. The real-model run verified **1,003 images**; default
+  record-only mode independently passed with two observations/images.
+- The restore check consumes only its own generated fixture backup. It is not a
+  general archive importer or user restore command. No live journal, private
+  evaluation data, research dataset or model weight was modified. Temporary
+  databases, photos and backup archives were removed by the harness on exit.
+
+The initial extended run correctly received 422 because its new fixture omitted
+the required record-only soil-condition field. The fixture was corrected to send
+`Normal`; no API requirement was relaxed. Final runs above exited successfully.
+An out-of-range `--extra-records 1001` invocation was rejected before startup.
+`git diff --check` passed. Existing app bundles were not rebuilt because this
+continuation changes only the smoke harness and this report. At the end of that
+continuation, these changes were local, unstaged and unpushed; the confirmed remote
+hash above refers to the previous four completed commits.
+
+Before committing this continuation, a second review found no embedded secrets,
+personal records or writes to live data in the two-file change. Both smoke modes
+passed again: the real-model run restored 1,003 observations/images and the
+record-only run restored two, preserving source hashes and retry identity. Python
+syntax, CLI bounds, Markdown fence balance, shell-block syntax and
+`git diff --check` passed. The verified origin fetch/push URL was
+`https://github.com/Munaz-new/AgriSense.git`, with remote `main` still at `2d14dbe`.
+
+Phases **7B–7D remain PARTIAL**. This load observation uses one plant, one repeated
+committed fixture and sequential localhost requests; it is not a general capacity
+benchmark, browser rendering test or device lifecycle result. Native durable draft
+storage, physical camera/gallery and process-lifecycle checks, actual browser
+upload/recovery, deletion/retention controls, Python vulnerability auditing and
+compatible dependency remediation remain unfinished. No dependency audit was
+rerun, so the earlier 23-package advisory count is historical evidence, not a new
+scan. The previously documented browser file-access blocker was not retried or
+changed. Physical-device checks still require a device. Phase **7E remains
+COMPLETED for local release preparation only**; public release remains blocked by
+the previously documented device, dependency and deployment requirements.
