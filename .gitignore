@@ -76,6 +76,7 @@ kaggle.json
 *.rar
 
 # Credentials and additional local caches
+.aws/
 secrets/
 credentials/
 credentials.json

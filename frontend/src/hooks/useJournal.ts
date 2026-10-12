@@ -17,6 +17,7 @@ export function useJournal() {
   const [result,setResult]=useState<Observation|null>(null);
   const [name,setName]=useState('');
   const [cropName,setCropName]=useState('');
+  const [pendingPlant,setPendingPlant]=useState<{ id:string; name:string; crop:string|null }|null>(null);
   const [image,setImage]=useState<ImagePicker.ImagePickerAsset|null>(null);
   const [validation,setValidation]=useState<ValidationResult|null>(null);
   const [suitability,setSuitability]=useState<SuitabilityState>({ status: 'not_checked',message: '' });
@@ -38,21 +39,28 @@ export function useJournal() {
   const recoveredUri=useRef<string|null>(null);
   const [draftAvailable,setDraftAvailable]=useState(false);
   const [draftMessage,setDraftMessage]=useState('');
-  const locked=busy||pendingId!==null;
+  const locked=busy||pendingId!==null||pendingPlant!==null;
 
-  async function run(action: () => Promise<void>) {
+  async function run(action: () => Promise<void>,releaseRejectedRequest=false) {
     // React state updates are asynchronous; guard rapid taps before the next render.
     if(operation.current) return;
     operation.current=true;
     setBusy(true); setError('');
     try { await action(); } catch(e) {
+      const rejected=e instanceof ImageValidationError||(e instanceof PlantSuitabilityError&&e.code!=='plant_screening_unavailable');
+      if(rejected&&releaseRejectedRequest) {
+        // A definitive rejection saved nothing. Remove its old recovery identity
+        // before allowing a fresh request, otherwise IndexedDB rejects that save.
+        try { await removeDraft(); setDraftAvailable(false); }
+        catch { setError('The photo was rejected, but its recovery copy could not be removed. Check history, then discard the draft before selecting another photo.'); return; }
+      }
       if(e instanceof ImageValidationError) {
         setValidation(e.validation); setSuitability({ status: 'not_checked',message: '' });
-        setPendingId(null); setPendingAnalysis(null);
+        if(releaseRejectedRequest) { setPendingId(null); setPendingAnalysis(null); }
       }
       if(e instanceof PlantSuitabilityError) {
         setSuitability({ status: e.code==='non_plant_image'? 'rejected':e.code==='plant_content_uncertain'? 'inconclusive':'unavailable',message: e.message });
-        if(e.code!=='plant_screening_unavailable') { setPendingId(null); setPendingAnalysis(null); }
+        if(releaseRejectedRequest&&e.code!=='plant_screening_unavailable') { setPendingId(null); setPendingAnalysis(null); }
       }
       setError(e instanceof Error? e.message:'Something went wrong. Please retry.');
     } finally { operation.current=false; setBusy(false); }
@@ -123,9 +131,9 @@ export function useJournal() {
   function navigate(next: Screen) { setError(''); setScreen(next); }
   async function openHistory(next: 'history'|'dashboard',plant=selected) {
     if(!plant) { navigate('plants'); return; }
+    if(plant.id!==selected?.id&&!selectPlant(plant)) return;
     await run(async () => {
       const [items,comparison]=await Promise.all([api.observations(plant.id),api.progression(plant.id,plant.id===selected?.id? progressRef:'')]);
-      if(plant.id!==selected?.id) selectPlant(plant);
       setRecords(previous => ({ ...previous,[plant.id]: items }));
       setObservations(items); setProgress(comparison); setScreen(next);
     });
@@ -171,6 +179,7 @@ export function useJournal() {
     });
   }
   async function saveRecord(analyze=false) {
+    if(pendingPlant) { setError('Finish the pending plant save in My Plants first.'); return; }
     const reasons=scanBlockers({ busy,selected,image,validation,suitability,health,pendingAnalysis,temperature,humidity,soilType,condition },analyze);
     if(reasons.length) { setError(reasons.join(' ')); return; }
     if(!selected||!image) return;
@@ -189,32 +198,39 @@ export function useJournal() {
         { request_id: id,observed_at: timestamp,observed_timezone: observedTimezone,tracking_ref: trackingRef.trim()||null,notes: notes.trim()||null });
       setRecords(previous => ({ ...previous,[selected.id]: [...(previous[selected.id]||[]).filter(item => item.id!==saved.id),saved].sort((a,b) => (a.observed_at||a.created_at).localeCompare(b.observed_at||b.created_at)) }));
       clearDraft(); setResult(saved); setScreen('result');
-    });
+    },true);
   }
 
   function selectPlant(plant: Plant) {
-    if(locked||plant.id===selected?.id) return;
-    if(draftAvailable&&!image) { setError('Open Scan to restore or discard the local recovery copy first.'); return; }
+    if(plant.id===selected?.id) return true;
+    if(locked||operation.current) return false;
+    if(draftAvailable&&!image) { setError('Open Scan to restore or discard the local recovery copy first.'); return false; }
     setSelected(plant); setObservations([]); setProgress(null); setProgressRef(''); setResult(null); clearDraft();
+    return true;
   }
   function startScan(plant=selected) {
-    if(plant&&plant.id!==selected?.id) selectPlant(plant);
+    if(plant&&plant.id!==selected?.id&&!selectPlant(plant)) return;
     navigate('scan');
   }
   async function addPlant() {
+    if(busy||pendingId!==null) return;
     if(draftAvailable&&!image) { setError('Open Scan to restore or discard the local recovery copy first.'); return; }
     await run(async () => {
-      const plant=await api.addPlant(name.trim(),cropName.trim()||null);
-      setPlants(previous => [plant,...previous]); setSelected(plant);
-      setRecords(previous => ({ ...previous,[plant.id]: [] }));
-      setObservations([]); setProgress(null); setProgressRef(''); setResult(null); clearDraft(); setName(''); setCropName('');
+      const request=pendingPlant||{ id:retryId(null),name:name.trim(),crop:cropName.trim()||null };
+      if(!request.name) throw new Error('Enter a name for this plant.');
+      setPendingPlant(request);
+      const plant=await api.addPlant(request.name,request.crop,request.id);
+      setPlants(previous => [plant,...previous.filter(item => item.id!==plant.id)]); setSelected(plant);
+      setRecords(previous => ({ ...previous,[plant.id]: previous[plant.id]||[] }));
+      setObservations([]); setProgress(null); setProgressRef(''); setResult(null); clearDraft(); setName(''); setCropName(''); setPendingPlant(null);
     });
   }
   return {
-    analysisBlockers: scanBlockers({ busy,selected,image,validation,suitability,health,pendingAnalysis,temperature,humidity,soilType,condition },true),
-    recordBlockers: scanBlockers({ busy,selected,image,validation,suitability,health,pendingAnalysis,temperature,humidity,soilType,condition },false),
+    analysisBlockers: [...(pendingPlant? ['Finish the pending plant save in My Plants first.']:[]),...scanBlockers({ busy,selected,image,validation,suitability,health,pendingAnalysis,temperature,humidity,soilType,condition },true)],
+    recordBlockers: [...(pendingPlant? ['Finish the pending plant save in My Plants first.']:[]),...scanBlockers({ busy,selected,image,validation,suitability,health,pendingAnalysis,temperature,humidity,soilType,condition },false)],
     health,screen,plants,selected,records,observations,progress,progressRef,result,
     name,setName,cropName,setCropName,image,imageRevision,validation,suitability,temperature,setTemperature,
+    pendingPlant,discardPendingPlant: () => { if(!busy) setPendingPlant(null); },
     humidity,setHumidity,soilType,setSoilType,condition,setCondition,observedAt,observedTimezone,
     trackingRef,setTrackingRef,notes,setNotes,pendingId,pendingAnalysis,busy,error,locked,navigate,
     openHistory,pick,validateImage,saveRecord,clearDraft,selectPlant,startScan,addPlant,

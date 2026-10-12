@@ -8,10 +8,10 @@ export function Button({ title,onPress,disabled=false,secondary=false,icon }: { 
     {icon&&<Icon name={icon} size={20} color={secondary? colors.green:'#FFF'} />}<Text style={[s.buttonText,secondary&&s.secondaryText,{ flexShrink: 1 }]}>{title}</Text>
   </Pressable>;
 }
-export function Field({ label,value,setValue,numeric=false,disabled=false,multiline=false }: { label: string; value: string; setValue: (text: string) => void; numeric?: boolean; disabled?: boolean; multiline?: boolean; }) {
+export function Field({ label,value,setValue,numeric=false,disabled=false,multiline=false,maxLength=100 }: { label: string; value: string; setValue: (text: string) => void; numeric?: boolean; disabled?: boolean; multiline?: boolean; maxLength?: number; }) {
   return <View style={s.field}>
     <Text style={s.label}>{label}</Text>
-    <TextInput accessibilityLabel={label} style={[s.input,multiline&&{ minHeight: 80,textAlignVertical: 'top' }]} editable={!disabled} value={value} onChangeText={setValue} keyboardType={numeric? 'numbers-and-punctuation':'default'} maxLength={100} multiline={multiline} />
+    <TextInput accessibilityLabel={label} style={[s.input,multiline&&{ minHeight: 80,textAlignVertical: 'top' }]} editable={!disabled} value={value} onChangeText={setValue} keyboardType={numeric? 'numbers-and-punctuation':'default'} maxLength={maxLength} multiline={multiline} />
   </View>;
 }
 export function Badge({ children }: { children: string; }) {

@@ -150,9 +150,15 @@ def run(real_model=False, startup_timeout=60, extra_records=0):
             cors = client.get('/health', headers={'Origin': 'http://localhost:8081'})
             assert cors.headers.get('access-control-allow-origin') == 'http://localhost:8081'
             results['browser_origin_api_headers'] = 'PASS'
-            response = client.post('/plants', json={'name': 'Disposable smoke plant', 'crop_name': 'tomato'})
+            plant_fields = {'name': 'Disposable smoke plant', 'crop_name': 'tomato', 'request_id': 'smoke-plant-001'}
+            response = client.post('/plants', json=plant_fields)
             assert response.status_code == 201
             plant_record = response.json()
+            replay_plant = client.post('/plants', json=plant_fields)
+            assert replay_plant.status_code == 200 and replay_plant.json() == plant_record
+            assert client.post('/plants', json={**plant_fields, 'crop_name': 'potato'}).status_code == 409
+            assert len(client.get('/plants').json()) == 1
+            results['plant_creation_retry_conflict'] = 'PASS'
             plant = plant_record['id']
             route = f'/plants/{plant}/records'
             def post(path, fields=None, image=leaf):

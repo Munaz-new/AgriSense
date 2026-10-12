@@ -83,8 +83,8 @@ async function imageForm(image: ImagePickerAsset): Promise<FormData> {
 export const api = {
   health: () => request<Health>('/health'),
   plants: () => request<Plant[]>('/plants'),
-  addPlant: (name: string, cropName: string | null = null) => request<Plant>('/plants', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, crop_name: cropName }),
+  addPlant: (name: string, cropName: string | null = null, requestId?: string) => request<Plant>('/plants', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, crop_name: cropName, request_id: requestId }),
   }),
   observations: (id: string) => request<Observation[]>(`/plants/${id}/observations`),
   progression: (id: string, trackingRef = '') => request<Progression>(`/plants/${id}/progression${trackingRef.trim() ? `?tracking_ref=${encodeURIComponent(trackingRef.trim())}` : ''}`),

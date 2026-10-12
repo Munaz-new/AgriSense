@@ -6,7 +6,7 @@ import { s } from '../theme';
 import { Button,Badge,Field,Title,date } from '../components/UI';
 import { Icon } from '../components/Icon';
 export function PlantsScreen({ j }: { j: Journal; }) {
-  const [adding,setAdding]=useState(!j.plants.length||!!j.cropName);
+  const [adding,setAdding]=useState(!j.plants.length||!!j.cropName||!!j.pendingPlant);
   return <>
     <Title title="My Plants" subtitle="One profile for each physical plant." />
     <Button title={adding? 'Close plant form':'Add Plant'} icon="plus" disabled={j.locked} onPress={() => setAdding(!adding)} />
@@ -16,7 +16,11 @@ export function PlantsScreen({ j }: { j: Journal; }) {
       <Field label="Crop name (optional, user identified)" value={j.cropName} setValue={j.setCropName} disabled={j.locked} />
       <Button title="Set crop to tomato" secondary disabled={j.locked} onPress={() => j.setCropName('tomato')} />
       <Text style={s.muted}>Tomato analysis uses the crop field, not the plant name.</Text>
-      <Button title="Save plant" disabled={j.locked||!j.name.trim()} onPress={() => void j.addPlant()} />
+      <Button title={j.pendingPlant? 'Retry the same plant save':'Save plant'} disabled={j.busy||j.pendingId!==null||!j.name.trim()} onPress={() => void j.addPlant()} />
+      {j.pendingPlant&&<>
+        <Text style={s.notice}>The plant may already be saved. Refresh plants below, then retry with the same request ID. Keep this app open; after restarting, check the plant list before creating it again.</Text>
+        <Button title="Unlock plant form after checking plants" secondary disabled={j.busy} onPress={j.discardPendingPlant} />
+      </>}
     </View>}
     {j.plants.map(plant => {
       const items=j.records[plant.id]; const latest=items?.[items.length-1]; return <View key={plant.id} style={[s.card,j.selected?.id===plant.id&&s.selected]}>

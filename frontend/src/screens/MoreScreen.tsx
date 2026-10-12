@@ -9,7 +9,7 @@ const sections=[
   ['How AgriSense works','From first photo to plant history','1. Add or select your plant.\n2. Capture or choose a photo.\n3. Validate the image and enter field context.\n4. Save without analysis, or analyze a tomato leaf when the model is available.\n5. Revisit the same plant over time.'],
   ['Project information','The current stage of the project','AgriSense supports plant records and tomato-leaf analysis when the model and plant suitability screening are available. Screening and disease predictions can be wrong. Severity and health progression remain unavailable.'],
   ['Help','Photos, records and retries','Use a well-lit JPEG, PNG or WebP photo. File validation does not verify plant content. If a save times out, check history and retry the same save. Exact-image reuse is flagged and is not new progression evidence. Camera access needs permission; you can also select a photo.'],
-  ['Settings','Connection and storage','Records are stored by your connected AgriSense service. Unsaved photo drafts live only in this app session. There are no cloud accounts or notifications to configure.'],
+  ['Settings','Connection and storage','Records are stored by your connected AgriSense service. Browser photo drafts can be kept locally and are retained before a save for recovery. Native drafts last only for this app session. There are no cloud accounts or notifications to configure.'],
 ];
 export function MoreScreen({ j }: { j: Journal; }) {
   const [open,setOpen]=useState<string|null>(null);
@@ -27,7 +27,7 @@ export function MoreScreen({ j }: { j: Journal; }) {
         </View>
         <Icon name="arrow" />
       </Pressable>{open===title&&<Text style={s.body}>{body}</Text>}{open==='Settings'&&title==='Settings'&&<>
-        <Text style={s.notice}>{j.health? 'Observation service connected · Record-only mode':'Observation service not connected'}</Text>
+        <Text style={s.notice}>{j.health? `Observation service connected · ${j.health.capabilities.tomato_analysis? 'Tomato analysis available':'Record-only mode'}`:'Observation service not connected'}</Text>
         <Button title="Check connection" secondary disabled={j.busy} onPress={() => void j.refresh()} />
       </>}</View>)}<Text style={[s.muted,{ textAlign: 'center' }]}>AgriSense · Your plants, one observation at a time.</Text>
   </>;

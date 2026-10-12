@@ -71,7 +71,7 @@ export function ScanScreen({ j }: { j: Journal; }) {
         <Text style={s.muted}>Captured when you selected the photo, not its original camera date. Server save time is recorded separately.</Text>
         <Field label="Leaf / site reference (optional)" disabled={j.locked} value={j.trackingRef} setValue={j.setTrackingRef} />
         <Text style={s.muted}>A stable observation ID is generated on save. Add a reference only to track the same leaf or site. This alone does not establish comparable measurements.</Text>
-        <Field label="Notes (optional)" multiline disabled={j.locked} value={j.notes} setValue={j.setNotes} />
+        <Field label="Notes (optional, up to 2,000 characters)" maxLength={2000} multiline disabled={j.locked} value={j.notes} setValue={j.setNotes} />
         <Text style={s.notice}>Disease analysis has not completed for this draft. Analyze tomato leaf and save checks suitability again before classification. Screening can make mistakes and does not confirm tomato identity. Scores are uncalibrated; severity is not measured.</Text>
         {j.selected?.crop_name?.trim().toLowerCase()!=='tomato'&&<Text style={s.muted}>Select a plant with crop set to tomato to enable analysis. Other plants can still be recorded without analysis.</Text>}
         {j.analysisBlockers.length>0&&<Text style={s.notice}>Analyze disabled: {j.analysisBlockers.join(' ')}</Text>}

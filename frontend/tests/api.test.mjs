@@ -49,6 +49,16 @@ test('progression query encodes user-entered leaf reference', async () => {
   assert.equal(requests[0].url, 'http://test-only/plants/plant-a/progression?tracking_ref=Leaf%20A%20%26%20B');
 });
 
+test('plant creation transmits a stable retry identity', async () => {
+  const { api, requests } = client();
+  await api.addPlant('Plant A', 'tomato', 'plant-request-001');
+  await api.addPlant('Plant A', 'tomato', 'plant-request-001');
+  assert.deepEqual(requests.map(r => JSON.parse(r.options.body)), [
+    { name:'Plant A', crop_name:'tomato', request_id:'plant-request-001' },
+    { name:'Plant A', crop_name:'tomato', request_id:'plant-request-001' },
+  ]);
+});
+
 test('analysis save sends image, context and stable request identity to observations', async () => {
   const { api, requests } = client();
   const details = { request_id: 'analysis-request', observed_at: '2025-01-01T10:00:00Z', tracking_ref: 'leaf-a', notes: 'field note' };

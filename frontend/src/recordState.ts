@@ -14,7 +14,7 @@ export function recordLabels(record: Pick<Observation, 'disease' | 'severity' | 
   return {
     disease: unanalysed || record.disease === null ? 'Disease not assessed' : record.disease,
     severity: unanalysed || record.severity === null ? 'Severity not measured' : `${record.severity}% ${record.is_mock ? 'synthetic demo severity' : 'recorded severity'}`,
-    confidence: unanalysed || record.confidence === null ? 'Confidence unavailable' : `${record.confidence}% ${record.is_mock ? 'synthetic confidence' : 'prediction score (uncalibrated)'}`,
+    confidence: unanalysed || record.confidence === null ? 'Confidence unavailable' : `${Number(record.confidence.toFixed(1))}% ${record.is_mock ? 'synthetic confidence' : 'prediction score (uncalibrated)'}`,
     notice: record.is_mock ? 'DEVELOPMENT MOCK • Historical demo values, not a diagnosis.'
       : unanalysed ? 'Recorded without analysis. No disease or severity conclusion.'
       : record.analysis_status === 'legacy_unknown' ? 'Historical analysis • measurement provenance may be unavailable.'

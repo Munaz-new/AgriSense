@@ -323,3 +323,68 @@ test('canceling picker retains the current image and its checks', async () => {
   assert.equal(render().image, asset);
   assert.equal(render().suitability.status, 'accepted');
 });
+
+test('plant creation timeout retries the same identity and does not duplicate a refreshed plant', async () => {
+  const calls=[]; let saved=null;
+  const render=journalHarness({health:async()=>({capabilities:{record_only:true}}),
+    plants:async()=>saved?[saved]:[],observations:async()=>[],
+    addPlant:async(name,crop,id)=>{calls.push({name,crop,id});
+      if(!saved){saved={id:'plant-saved',name,crop_name:crop};throw new Error('timeout');}
+      return saved;
+    }});
+  await render().refresh();render().setName('Plant A');render().setCropName('tomato');
+  await render().addPlant();assert.equal(render().locked,true);assert.ok(render().pendingPlant);
+  await render().refresh();assert.equal(render().plants.length,1);
+  await render().addPlant();assert.deepEqual(calls[0],calls[1]);
+  assert.equal(render().plants.length,1);assert.equal(render().pendingPlant,null);
+});
+
+test('blocked selection cannot display another plant history under the selected name', async () => {
+  const a={id:'a'},b={id:'b'};let histories=0;
+  const render=journalHarness({health:async()=>({capabilities:{record_only:true}}),plants:async()=>[a,b],
+    observations:async()=>{histories++;return [];},progression:async()=>({status:'unavailable'})}, {},
+    {removeDraft:async()=>{throw new Error('storage unavailable');}});
+  await render().refresh();render().clearDraft();await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(render().draftAvailable,true);
+  const before=histories;await render().openHistory('history',b);
+  assert.equal(histories,before);assert.equal(render().selected.id,'a');
+  assert.notEqual(render().screen,'history');assert.match(render().error,/restore or discard/);
+});
+
+test('definitive analysis rejection clears recovery identity before a new save', async () => {
+  let stored=null, reject=true;
+  const render=journalHarness(scanApi({scan:async()=>{
+    if(reject)throw new PlantSuitabilityError('plant_content_uncertain','Try another photo');
+    return {id:'saved',created_at:'2026-01-01'};
+  }}),{}, {writeDraft:async fields=>{
+    if(stored?.pendingId&&stored.pendingId!==fields.pendingId)throw new Error('conflicting draft');
+    stored=fields;return true;
+  },removeDraft:async()=>{stored=null;}});
+  await render().refresh();await render().pick(false);await render().validateImage();
+  await render().saveRecord(true);assert.equal(stored,null);assert.equal(render().pendingId,null);
+  reject=false;await render().validateImage();await render().saveRecord(true);
+  assert.equal(render().result.id,'saved');
+});
+
+test('preview rejection cannot unlock an earlier uncertain save or erase its recovery identity', async () => {
+  let reject=false,stored=null;
+  const render=journalHarness(scanApi({scan:async()=>{throw new Error('timeout');},
+    checkSuitability:async()=>{if(reject)throw new PlantSuitabilityError('plant_content_uncertain','Try again');
+      return {outcome:'plant',message:'Accepted'};}}),{},
+    {writeDraft:async fields=>{stored=fields;return true;},removeDraft:async()=>{stored=null;}});
+  await render().refresh();await render().pick(false);await render().validateImage();await render().saveRecord(true);
+  const identity=render().pendingId;assert.ok(identity);
+  reject=true;await render().validateImage();
+  assert.equal(render().pendingId,identity);assert.equal(stored.pendingId,identity);assert.equal(render().locked,true);
+});
+
+test('rapid history taps cannot relabel an in-flight history request', async () => {
+  const a={id:'a'},b={id:'b'},c={id:'c'};let finish;
+  const pending=new Promise(resolve=>{finish=resolve;});let loading=false;
+  const render=journalHarness({health:async()=>({capabilities:{record_only:true}}),plants:async()=>[a,b,c],
+    observations:async id=>{if(loading)await pending;return [{id,plant_id:id}];},progression:async()=>({status:'unavailable'})});
+  await render().refresh();loading=true;
+  const stale=render();const first=stale.openHistory('history',b);await stale.openHistory('history',c);
+  finish();await first;
+  assert.equal(render().selected.id,'b');assert.equal(render().observations[0].plant_id,'b');
+});

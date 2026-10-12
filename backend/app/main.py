@@ -5,7 +5,7 @@ import logging
 from threading import Lock
 from pathlib import Path
 from typing import Annotated, Literal
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -35,6 +35,10 @@ class PlantInput(BaseModel):
 class Plant(PlantInput):
     id: str
     created_at: str
+
+
+class PlantCreate(PlantInput):
+    request_id: str | None = Field(default=None, min_length=8, max_length=100, pattern=r'^[A-Za-z0-9_-]+$')
 
 
 class Observation(BaseModel):
@@ -121,7 +125,7 @@ def create_app(database_path: Path | None = None, upload_dir: Path | None = None
                                               isinstance(predictor, TrainedTomatoPredictor) and plant_verifier is not None)
         yield
 
-    app = FastAPI(title="AgriSense Phase 5", lifespan=lifespan,
+    app = FastAPI(title="AgriSense: Plant Disease Detection and Health Monitoring Using Hybrid CNN-Transformer Architecture", lifespan=lifespan,
                   description="Local plant observation journal. Record-only saving requires no model.")
     origins = [origin.strip() for origin in os.getenv(
         'AGRISENSE_CORS_ORIGINS', 'http://localhost:8081,http://127.0.0.1:8081').split(',') if origin.strip()]
@@ -157,9 +161,19 @@ def create_app(database_path: Path | None = None, upload_dir: Path | None = None
 
 
     @app.post("/plants", response_model=Plant, status_code=201)
-    def add_plant(body: PlantInput):
-        plant = {"id": str(uuid4()), "name": body.name, "created_at": now(), "crop_name": body.crop_name}
+    def add_plant(body: PlantCreate, response: Response):
+        # Optional client identity makes a lost-response retry safe without changing
+        # existing journals or conflating different plants with the same name.
+        plant_id = uuid5(NAMESPACE_URL, 'agrisense:plant:' + body.request_id) if body.request_id else uuid4()
+        plant = {"id": str(plant_id), "name": body.name, "created_at": now(), "crop_name": body.crop_name}
         with connect(database_path) as db:
+            db.execute('BEGIN IMMEDIATE')
+            existing = db.execute('SELECT * FROM plants WHERE id = ?', (plant['id'],)).fetchone()
+            if existing is not None:
+                if existing['name'] != body.name or existing['crop_name'] != body.crop_name:
+                    raise HTTPException(409, 'This plant request ID was already used with different details.')
+                response.status_code = 200
+                return dict(existing)
             db.execute("INSERT INTO plants (id, name, created_at, crop_name) VALUES (:id, :name, :created_at, :crop_name)", plant)
         return plant
 

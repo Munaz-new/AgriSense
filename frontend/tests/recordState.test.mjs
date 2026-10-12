@@ -107,3 +107,9 @@ test('button gates preserve crop, image, readiness, context and retry safety', a
     assert.ok(scanBlockers({ ...recordOnly, ...patch }, false).length, JSON.stringify(patch));
   }
 });
+
+test('prediction display rounds long decimals without modifying the saved score', () => {
+  const record={analysis_status:'completed',disease:'Bacterial_spot',severity:null,confidence:99.65035915374756,is_mock:false};
+  assert.equal(recordLabels(record).confidence,'99.7% prediction score (uncalibrated)');
+  assert.equal(record.confidence,99.65035915374756);
+});

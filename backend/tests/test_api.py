@@ -67,6 +67,38 @@ def test_prediction_only_does_not_save(client, image):
     assert client.get(f'/plants/{plant_id}/observations').json() == []
 
 
+def test_plant_creation_retry_and_conflict(client):
+    body = {'name': '  Plant A  ', 'crop_name': 'tomato', 'request_id': 'plant-request-001'}
+    first = client.post('/plants', json=body)
+    assert first.status_code == 201
+    replay = client.post('/plants', json=body)
+    assert replay.status_code == 200
+    assert replay.json() == first.json()
+    for changed in [{'name': 'Plant B'}, {'crop_name': 'potato'}]:
+        assert client.post('/plants', json={**body, **changed}).status_code == 409
+    assert len(client.get('/plants').json()) == 1
+    # Same names with different identities are allowed for different physical plants.
+    assert client.post('/plants', json={**body, 'request_id': 'plant-request-002'}).status_code == 201
+    assert len(client.get('/plants').json()) == 2
+
+
+@pytest.mark.parametrize('request_id', ['', 'short', 'x' * 101, 'bad/id-001'])
+def test_invalid_plant_request_identity(client, request_id):
+    assert client.post('/plants', json={'name': 'Plant', 'request_id': request_id}).status_code == 422
+    assert client.get('/plants').json() == []
+
+
+def test_plant_retry_survives_restart(tmp_path):
+    path, uploads = tmp_path / 'journal.db', tmp_path / 'uploads'
+    body = {'name': 'Plant', 'request_id': 'restart-plant-001'}
+    with TestClient(create_app(path, uploads, MockPredictor())) as first:
+        saved = first.post('/plants', json=body).json()
+    with TestClient(create_app(path, uploads, MockPredictor())) as second:
+        replay = second.post('/plants', json=body)
+        assert replay.status_code == 200
+        assert replay.json() == saved
+
+
 @pytest.mark.parametrize('context', [
     {'temperature': '71'}, {'temperature': '-51'}, {'temperature': 'nan'},
     {'humidity': '101'}, {'humidity': '-1'}, {'humidity': 'inf'},
