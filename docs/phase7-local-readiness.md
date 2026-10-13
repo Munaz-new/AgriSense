@@ -1,5 +1,10 @@
 # Phases 7B–7E: local application readiness
 
+**Historical October 11 report.** Current October 13 verification and October 12 changes are in
+[the final submission runbook](final-submission-2026-10-12.md). In particular,
+protected operator deletion and plant-creation retry protection are now implemented;
+the browser upload and physical-device boundaries below remain unresolved.
+
 Audit date: 2026-10-11. Baseline: `5386401`. Scope: one local user, existing tomato
 checkpoint, temporary test databases/photos only. No research data, checkpoint,
 independent evaluation candidates, reviewer decisions or formal protocol changed.

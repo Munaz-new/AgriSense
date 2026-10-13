@@ -1,7 +1,10 @@
-# AgriSense — controlled tomato-model integration
+# AgriSense: Plant Disease Detection and Health Monitoring Using Hybrid CNN-Transformer Architecture
 
-Current local readiness, reproducible checks, backup instructions, and remaining
-device/release blockers: [Phase 7B–7E report](docs/phase7-local-readiness.md).
+**October 13 submission status: PARTIALLY READY.** The real-model API, persistence,
+backup/restore and automated checks pass. Full browser photo selection/recovery
+and physical Android testing remain unverified. See the
+[final submission runbook and October 13 verification](docs/final-submission-2026-10-12.md).
+The [Phase 7B–7E report](docs/phase7-local-readiness.md) preserves earlier evidence.
 
 Expo + React Native + TypeScript, FastAPI, and SQLite. The app supports both
 record-only plant journaling and explicit tomato-leaf analysis using the evaluated
@@ -124,7 +127,8 @@ In a second terminal:
 ```bash
 cd /path/to/AgriSense/frontend
 npm ci
-cp .env.example .env
+# Only if .env does not already exist:
+cp -n .env.example .env
 npm run web
 ```
 
@@ -181,20 +185,36 @@ is not implemented: keep an uncertain native save open and check history.
 7. If saving times out, keep the pending form open and check history. **Retry the
    same save** retains its request ID and returns the original saved record. Fields
    remain locked to prevent changing an uncertain submission. Discarding a form
-   never deletes a saved observation. Pending forms do not survive app restart;
-   inspect history before starting a fresh submission after restarting.
+   never deletes a saved observation. Browser recovery copies can be restored from Scan after reopening. Native
+   pending forms do not survive app restart; inspect history before starting a
+   fresh native submission.
 
 Newly saved identical image bytes for the same plant are flagged as reused evidence,
 not deleted. This is exact-byte detection, not near-duplicate or same-leaf recognition;
 older records with unknown image hashes are not retroactively matched.
 
 
+## Journal export and protected deletion
+
+The existing `python -m backend.backup` command exports SQLite, JSON records,
+photos and integrity hashes. The new `python -m backend.delete_plant` command
+previews one plant's removal by default. Applying requires an exact name and a
+successful private backup, and refuses a journal changed during backup. It removes
+journal rows but retains photo files; it is not secure erasure. Stop the backend
+first. See the [operator commands and restoration boundaries](docs/final-submission-2026-10-12.md#private-export-and-protected-deletion).
+There is no in-app deletion button or public deletion API.
+
+Plant creation now retains one request identity during an uncertain save. Refresh
+the plant list and use **Retry the same plant save**. Keep the app open during this
+retry; plant-form identity does not survive restart. Observation browser recovery
+is separate and includes exact photo bytes.
+
 ## API contract
 
 | Method | Endpoint | Input / behavior |
 | --- | --- | --- |
 | GET | `/health` | Predictor readiness plus record-only / technical-validation / plant-screening / tomato-analysis / severity / progression capabilities |
-| POST | `/plants` | JSON `name` and optional `crop_name`; returns UUID and UTC save timestamp |
+| POST | `/plants` | JSON `name`, optional `crop_name` and `request_id`; new save 201, identical retry 200, changed retry 409 |
 | GET | `/plants` | Plants, newest first |
 | GET | `/plants/{plant_id}` | One plant, or 404 |
 | POST | `/plants/{plant_id}/observations` | Multipart `image`, `temperature`, `humidity`, `soil_type`, `soil_condition`; revalidates, predicts, and saves; existing Phase 1 contract retained |
@@ -221,7 +241,7 @@ metadata was not reconstructed. `is_mock=false` alone never means a record was
 analyzed. Both frontend and backend contracts now permit absent analysis fields.
 
 Database initialization transactionally migrates known older schemas to
-`PRAGMA user_version=1`. Original fields are preserved; new historical fields remain
+`PRAGMA user_version=3`. Original fields are preserved; new historical fields remain
 null/unknown. Future or unrecognized schemas fail without partially migrating.
 Back up a valued local database before first running upgraded application code.
 
