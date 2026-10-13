@@ -3,6 +3,11 @@
 Latest verification: **October 13, 2026**. Resumed from `e960871` on `main`.
 The original October 12 verification used baseline `104ee584`.
 
+Subsequent camera work is documented in the [phone-camera integration guide](phone-camera-integration.md).
+It adds native capture handling and an explicit browser live camera; physical-device
+and real browser camera testing remain unverified. Earlier bundle paths below
+predate that feature; use Metro or the newer export identified in that guide.
+
 **PARTIALLY READY.** The local real-model HTTP workflow, database persistence,
 backup/restore, automated tests and frontend bundles pass. The complete browser
 photo-picker → draft recovery → analysis → history workflow remains unverified

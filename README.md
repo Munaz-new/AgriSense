@@ -5,6 +5,8 @@ backup/restore and automated checks pass. Full browser photo selection/recovery
 and physical Android testing remain unverified. See the
 [final submission runbook and October 13 verification](docs/final-submission-2026-10-12.md).
 The [Phase 7B–7E report](docs/phase7-local-readiness.md) preserves earlier evidence.
+The [phone-camera integration guide](docs/phone-camera-integration.md) covers the
+current native/browser capture flow, automated checks and Android test instructions.
 
 Expo + React Native + TypeScript, FastAPI, and SQLite. The app supports both
 record-only plant journaling and explicit tomato-leaf analysis using the evaluated
@@ -147,7 +149,18 @@ npm start
 
 Scan the QR code with compatible Expo Go. `localhost` on a phone points to the phone, not the backend computer. For the standard Android emulator, use `http://10.0.2.2:8000`; an iOS simulator can use `http://localhost:8000`. Restart Expo after changing `.env` (`npx expo start --clear` if needed). Expo public variables are bundled into the app and must never contain secrets.
 
-Camera capture requests permission on native devices. Browser camera/file behavior depends on browser support; photo selection is the reliable desktop path. Images must meet the format, file-size, resolution, and still-image limits above. Convert unsupported HEIC images before uploading if the native picker does not convert them.
+**Take Photo** opens the native Android/iOS camera after checking camera permission.
+**Choose from Gallery** remains separate. Review the returned preview, choose
+**Retake Photo** or **Cancel photo**, or select **Use photo — check file and plant
+suitability** before analyzing and saving. Capture alone never uploads or analyzes.
+
+On web, Take Photo opens a live browser camera with explicit **Capture photo** and
+**Cancel camera** controls. It requests video only and stops the stream on capture,
+cancel, navigation or leaving the page. Browser camera access requires permission
+and HTTPS or localhost; a phone opening a plain HTTP laptop LAN address cannot use
+this camera flow. Use the native app or explicitly choose the gallery instead.
+Images still pass the existing format, file-size, resolution and still-image checks.
+Convert unsupported HEIC images before uploading if the native picker does not convert them.
 
 For phone testing on a trusted private network, change the backend bind address to
 `--host 0.0.0.0`. There is no authentication: do not expose these ports publicly.
@@ -167,7 +180,7 @@ is not implemented: keep an uncertain native save open and check history.
 
 1. Add a unique plant name/identifier. Optionally supply its crop name; the app does
    not identify crops from photos or infer species from plant names.
-2. Choose **New observation**, select/capture a photo, and **Check file and plant suitability**.
+2. Choose **New observation**, select/capture a photo, and **Use photo — check file and plant suitability**.
    Record-only saving requires file validation; suitability acceptance is required
    only for **Analyze tomato leaf and save**, which checks suitability again.
 3. Temperature, humidity, and soil type are optional and independently recorded;

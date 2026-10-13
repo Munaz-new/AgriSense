@@ -10,7 +10,7 @@ import * as recordState from '../src/recordState.ts';
 class PlantSuitabilityError extends Error {
   constructor(code, message) { super(message); this.code = code; }
 }
-function journalHarness(api, picker = {}, drafts = {}) {
+function journalHarness(api, picker = {}, drafts = {}, camera = {}) {
   api = { checkSuitability: async () => ({ outcome: 'plant', message: 'Leaf content supported' }), ...api };
   const state = [];
   let cursor = 0;
@@ -34,14 +34,23 @@ function journalHarness(api, picker = {}, drafts = {}) {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   }).outputText;
   const exports = {};
+  const imagePicker = { launchImageLibraryAsync: async () => ({ canceled: false, assets: [{ uri: 'test-image' }] }),
+    CameraType: { back: 'back' }, ...picker };
+  const captureExports = {};
+  runInNewContext(ts.transpileModule(readFileSync(new URL('../src/photoCapture.ts', import.meta.url), 'utf8'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText, { exports: captureExports, Error, require: () => imagePicker });
   runInNewContext(compiled, {
-    exports, Error, URL,
+    exports, Error, URL, AbortController,
     require(name) {
       if (name === 'react') return react;
       if (name === '../api') return { api, PlantSuitabilityError, ImageValidationError: class extends Error {} };
       if (name === '../recordState') return recordState;
       if (name === '../draftStore') return { draftStorageAvailable: () => false, writeDraft: async () => false, readDraft: async () => null, removeDraft: async () => {}, ...drafts };
-      if (name === 'expo-image-picker') return { launchImageLibraryAsync: async () => ({ canceled: false, assets: [{ uri: 'test-image' }] }), ...picker };
+      if (name === 'expo-image-picker') return imagePicker;
+      if (name === 'react-native') return { Platform: { OS: camera.platform || 'android' } };
+      if (name === '../photoCapture') return captureExports;
+      if (name === '../browserCamera') return { captureBrowserPhoto: camera.capture };
       throw new Error(`Unexpected import: ${name}`);
     },
   });
@@ -387,4 +396,109 @@ test('rapid history taps cannot relabel an in-flight history request', async () 
   const stale=render();const first=stale.openHistory('history',b);await stale.openHistory('history',c);
   finish();await first;
   assert.equal(render().selected.id,'b');assert.equal(render().observations[0].plant_id,'b');
+});
+
+test('native camera requests permission, previews fresh capture, retakes and cancels without uploading', async () => {
+  let requests=0, launches=0, validations=0;
+  const render=journalHarness(scanApi({validateImage:async()=>{validations++;return {is_valid:true};}}), {
+    getCameraPermissionsAsync:async()=>({granted:false,canAskAgain:true}),
+    requestCameraPermissionsAsync:async()=>{requests++;return {granted:true};},
+    launchCameraAsync:async options=>{
+      assert.equal(options.mediaTypes[0],'images');assert.equal(options.allowsEditing,false);
+      assert.equal(options.cameraType,'back');launches++;
+      return {canceled:false,assets:[{uri:`file:///camera-${launches}.jpg`,width:1200,height:1600}]};
+    },
+  });
+  await render().refresh();await render().pick(true);
+  assert.equal(requests,1);assert.equal(render().image.uri,'file:///camera-1.jpg');
+  assert.equal(validations,0);assert.match(render().photoMessage,/Nothing has been uploaded/);
+  await render().validateImage();assert.equal(render().suitability.status,'accepted');
+  await render().pick(true);assert.equal(render().image.uri,'file:///camera-2.jpg');
+  assert.equal(render().imageRevision,2);assert.equal(render().validation,null);
+  assert.equal(render().suitability.status,'not_checked');assert.equal(render().result,null);
+  render().cancelPhoto();assert.equal(render().image,null);assert.equal(render().pendingId,null);
+  assert.match(render().photoMessage,/Photo canceled/);
+});
+
+for(const canAskAgain of [true,false]) test(`native permission denial is actionable (canAskAgain=${canAskAgain}) and gallery still works`,async()=>{
+  let requests=0,launches=0;
+  const render=journalHarness(scanApi(),{
+    getCameraPermissionsAsync:async()=>({granted:false,canAskAgain}),
+    requestCameraPermissionsAsync:async()=>{requests++;return {granted:false,canAskAgain};},
+    launchCameraAsync:async()=>{launches++;},
+  });
+  await render().refresh();await render().pick(true);
+  assert.equal(requests,canAskAgain?1:0);assert.equal(launches,0);assert.equal(render().busy,false);
+  assert.match(render().error,canAskAgain?/permission was denied/:/phone settings/);
+  await render().pick(false);assert.equal(render().image.uri,'test-image');assert.equal(render().error,'');
+});
+
+test('granted camera permission is not requested again; native cancellation retains prior image and validation',async()=>{
+  const render=journalHarness(scanApi(),{
+    getCameraPermissionsAsync:async()=>({granted:true}),
+    requestCameraPermissionsAsync:async()=>assert.fail('must not request granted permission'),
+    launchCameraAsync:async()=>({canceled:true,assets:null}),
+  });
+  await render().refresh();await render().pick(false);await render().validateImage();
+  const previous=render().image;
+  await render().pick(true);
+  assert.equal(render().image,previous);assert.equal(render().validation.is_valid,true);
+  assert.match(render().photoMessage,/Camera capture canceled/);assert.equal(render().busy,false);
+});
+
+for(const returned of [null,{canceled:false,assets:[]},{canceled:false,assets:[{uri:''}]},
+  {canceled:false,assets:[{uri:'file:///empty.jpg',fileSize:0}]},
+  {canceled:false,assets:[{uri:'file:///bad.jpg',width:0,height:1000}]}]) {
+  test(`unavailable or empty camera result preserves a usable gallery photo: ${JSON.stringify(returned)}`,async()=>{
+    const render=journalHarness(scanApi(),{
+      getCameraPermissionsAsync:async()=>({granted:true}),
+      launchCameraAsync:async()=>{if(returned===null)throw new Error('No camera');return returned;},
+    });
+    await render().refresh();await render().pick(false);const previous=render().image;
+    await render().pick(true);assert.equal(render().image,previous);assert.equal(render().locked,false);
+    assert.match(render().error,returned===null?/camera could not open/:/No usable photo/);
+  });
+}
+
+test('camera analysis keeps one capture and save operation, preserves retry identity and blocks retake while uncertain',async()=>{
+  let release,launches=0,scans=0;const identities=[];
+  const render=journalHarness(scanApi({scan:async(id,image,env,details)=>{
+    assert.equal(image.uri,'file:///fresh.jpg');identities.push(details.request_id);
+    if(++scans===1)throw new Error('Cannot reach backend');
+    return {id:'saved',created_at:'2026-01-01'};
+  }}),{
+    getCameraPermissionsAsync:async()=>({granted:true}),
+    launchCameraAsync:async()=>{launches++;return await new Promise(resolve=>{release=resolve;});},
+  });
+  await render().refresh();const stale=render();const capture=stale.pick(true);await stale.pick(true);
+  await new Promise(resolve=>setImmediate(resolve));assert.equal(launches,1);
+  release({canceled:false,assets:[{uri:'file:///fresh.jpg',width:1200,height:1600}]});await capture;
+  await render().validateImage();const saveView=render();await Promise.all([saveView.saveRecord(true),saveView.saveRecord(true)]);
+  assert.equal(scans,1);assert.match(render().error,/Cannot reach backend/);assert.equal(render().result,null);
+  const pending=render().pendingId;render().cancelPhoto();await render().pick(true);
+  assert.equal(render().pendingId,pending);assert.equal(launches,1);
+  await render().saveRecord(true);assert.deepEqual(identities,[pending,pending]);assert.equal(render().result.id,'saved');
+});
+
+test('web capture uses the browser adapter, aborts on navigation and leaves gallery independently usable',async()=>{
+  let signal;
+  const render=journalHarness(scanApi(),{
+    getCameraPermissionsAsync:async()=>assert.fail('web must not use native permissions'),
+    launchCameraAsync:async()=>assert.fail('web must not use file-picker camera fallback'),
+  },{}, {platform:'web',capture:async input=>{
+    signal=input;
+    return new Promise(resolve=>input.addEventListener('abort',()=>resolve({canceled:true,assets:null})));
+  }});
+  await render().refresh();const capture=render().pick(true);assert.ok(signal);
+  render().navigate('home');await capture;assert.equal(signal.aborted,true);
+  assert.equal(render().image,null);assert.equal(render().busy,false);
+  await render().pick(false);assert.equal(render().image.uri,'test-image');
+});
+
+test('web capture object URL is released when its preview is canceled',async()=>{
+  const uri=URL.createObjectURL(new Blob(['fixture-photo']));
+  const render=journalHarness(scanApi(),{},{},{platform:'web',capture:async()=>({canceled:false,assets:[{uri,width:640,height:480}]})});
+  await render().refresh();await render().pick(true);
+  assert.equal(await (await fetch(render().image.uri)).text(),'fixture-photo');
+  render().cancelPhoto();await assert.rejects(fetch(uri));
 });

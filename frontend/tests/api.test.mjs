@@ -5,15 +5,16 @@ import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 
-function client(respond) {
+function client(respond, platform = 'web') {
   const requests = [];
   const source = readFileSync(new URL('../src/api.ts', import.meta.url), 'utf8');
   const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
   const exports = {};
   runInNewContext(compiled, {
-    exports, require: (name) => { assert.equal(name, 'react-native'); return { Platform: { OS: 'web' } }; },
+    exports, require: (name) => { assert.equal(name, 'react-native'); return { Platform: { OS: platform } }; },
     process: { env: { EXPO_PUBLIC_API_URL: 'http://test-only' } },
-    FormData, Blob, AbortController, setTimeout, clearTimeout, Error, TypeError,
+    FormData: platform === 'web' ? FormData : class extends Map { append(key,value) { this.set(key,value); } },
+    Blob, AbortController, setTimeout, clearTimeout, Error, TypeError,
     fetch: async (url, options) => {
       requests.push({ url, options });
       if (url === 'fixture-image') return { blob: async () => new Blob(['temporary test bytes'], { type: 'image/png' }) };
@@ -107,4 +108,34 @@ test('suitability preview uses its own endpoint without predicting or saving', a
   const { api, requests } = client(() => ({ ok: true, json: async () => ({ outcome: 'plant', message: 'Plant content supported' }) }));
   assert.equal((await api.checkSuitability({ uri: 'fixture-image' })).outcome, 'plant');
   assert.deepEqual(requests.filter(r => r.options?.method === 'POST').map(r => r.url), ['http://test-only/check-plant-suitability']);
+});
+
+test('native camera URI uses existing multipart file upload for validation, suitability and analysis',async()=>{
+  const {api,requests}=client(undefined,'android');
+  const image={uri:'file:///cache/fresh-camera.jpg',fileName:'fresh-camera.jpg',mimeType:'image/jpeg'};
+  await api.validateImage(image);await api.checkSuitability(image);
+  await api.scan('plant-a',image,{}, {request_id:'camera-analysis-001'});
+  assert.deepEqual(requests.map(r=>r.url),['http://test-only/validate-image','http://test-only/check-plant-suitability',
+    'http://test-only/plants/plant-a/observations']);
+  for(const {options} of requests) {
+    assert.equal(options.body.get('image').uri,image.uri);
+    assert.equal(options.body.get('image').name,image.fileName);
+    assert.equal(options.body.get('image').type,'image/jpeg');
+    assert.equal(options.headers,undefined); // The runtime supplies the multipart boundary.
+  }
+  assert.equal(requests[2].options.body.get('request_id'),'camera-analysis-001');
+});
+
+test('browser camera blob bytes survive the existing validation and analysis upload path',async()=>{
+  const blob=new Blob(['captured-jpeg-fixture'],{type:'image/jpeg'});const uri=URL.createObjectURL(blob);
+  try {
+    const {api,requests}=client((url)=>url===uri?fetch(uri):{ok:true,json:async()=>({id:'saved'})});
+    const image={uri,fileName:'camera-photo.jpg',mimeType:'image/jpeg'};
+    await api.validateImage(image);await api.scan('plant-a',image,{}, {request_id:'browser-camera-001'});
+    for(const {options} of requests.filter(r=>r.options?.method==='POST')) {
+      const file=options.body.get('image');assert.equal(await file.text(),'captured-jpeg-fixture');
+      assert.equal(file.type,'image/jpeg');assert.equal(file.name,'camera-photo.jpg');
+      for(const key of ['disease','confidence','severity'])assert.equal(options.body.has(key),false);
+    }
+  } finally {URL.revokeObjectURL(uri);}
 });

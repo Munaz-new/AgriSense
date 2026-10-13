@@ -18,7 +18,7 @@ function load(path) {
   const exports = {};
   runInNewContext(compiled, { exports, require(name) {
     if (name === 'react') return React;
-    if (name === 'react-native') return { Text: primitive, View: primitive, ScrollView: primitive, Pressable: primitive, Image: ({ source }) => React.createElement('img', { src: source.uri }), Linking: {} };
+    if (name === 'react-native') return { Platform: { OS: 'web' }, Text: primitive, View: primitive, ScrollView: primitive, Pressable: primitive, Image: ({ source }) => React.createElement('img', { src: source.uri }), Linking: {} };
     if (name.endsWith('/theme')) return { s: {} };
     if (name.endsWith('/api')) return { API_URL: 'http://test-only' };
     if (name.endsWith('/recordState')) return recordState;
@@ -63,6 +63,7 @@ test('Scan renders the current preview and distinct file, suitability and diseas
     ['unavailable','Plant suitability unavailable']]) {
     const html = renderToStaticMarkup(React.createElement(ScanScreen, { j: { ...base, suitability: { status, message: 'Screening detail' } } }));
     assert.ok(html.includes('src="current-logo.png"'));
+    for(const label of ['Retake Photo','Choose from Gallery','Cancel photo','Use photo','HTTPS or localhost']) assert.ok(html.includes(label),label);
     assert.ok(html.includes('File validation passed'));
     assert.ok(html.includes(label), label);
     assert.ok(html.includes('Disease analysis has not completed'));
@@ -72,4 +73,14 @@ test('Scan renders the current preview and distinct file, suitability and diseas
   assert.ok(completed.includes('Disease analysis completed'));
   const record = renderToStaticMarkup(React.createElement(ObservationCard, { observation: { ...real, analysis_status: 'not_requested' } }));
   assert.ok(!record.includes('Disease analysis completed'));
+});
+
+test('Scan exposes Take Photo separately from gallery and disables replacement for uncertain saves',()=>{
+  const {ScanScreen}=load(resolve(root,'screens/ScanScreen.tsx'));
+  const j={plants:[{id:'p',crop_name:'tomato'}],selected:{id:'p',crop_name:'tomato'},health:null,
+    image:null,suitability:{status:'not_checked'},analysisBlockers:[],recordBlockers:[]};
+  const initial=renderToStaticMarkup(React.createElement(ScanScreen,{j}));
+  assert.ok(initial.includes('Take Photo'));assert.ok(initial.includes('Choose from Gallery'));
+  const locked=renderToStaticMarkup(React.createElement(ScanScreen,{j:{...j,image:{uri:'pending.jpg'},locked:true,pendingId:'pending'}}));
+  for(const label of ['Retake Photo','Choose from Gallery','Cancel photo']) assert.ok(locked.includes(`<button disabled="">${label}</button>`),label);
 });

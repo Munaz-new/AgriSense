@@ -1,5 +1,8 @@
 import { useEffect,useState,useRef } from 'react';
 import * as ImagePicker from 'expo-image-picker';
+import { Platform } from 'react-native';
+import { captureNativePhoto,pickedPhoto } from '../photoCapture';
+import { captureBrowserPhoto } from '../browserCamera';
 import { api,Observation,Plant,SoilCondition,ValidationResult,Health,Progression,ImageValidationError,PlantSuitabilityError,SuitabilityState } from '../api';
 import { observationTime,retryId,captureObservation,scanBlockers } from '../recordState';
 import type { Screen } from '../navigation/BottomNav';
@@ -19,6 +22,8 @@ export function useJournal() {
   const [cropName,setCropName]=useState('');
   const [pendingPlant,setPendingPlant]=useState<{ id:string; name:string; crop:string|null }|null>(null);
   const [image,setImage]=useState<ImagePicker.ImagePickerAsset|null>(null);
+  const [photoMessage,setPhotoMessage]=useState('');
+  const cameraSession=useRef<AbortController|null>(null);
   const [validation,setValidation]=useState<ValidationResult|null>(null);
   const [suitability,setSuitability]=useState<SuitabilityState>({ status: 'not_checked',message: '' });
   const [imageRevision,setImageRevision]=useState(0);
@@ -71,7 +76,7 @@ export function useJournal() {
   }
   function clearDraft() {
     if(recoveredUri.current) { URL.revokeObjectURL(recoveredUri.current); recoveredUri.current=null; }
-    forgetStoredDraft(); setDraftMessage('');
+    forgetStoredDraft(); setDraftMessage(''); setPhotoMessage('');
     draftVersion.current+=1;
     setResult(null); setError(''); setSuitability({ status: 'not_checked',message: '' });
     setImage(null); setValidation(null); setPendingId(null); setPendingAnalysis(null);
@@ -96,7 +101,10 @@ export function useJournal() {
       catch(e) { setDraftAvailable(true); setDraftMessage(e instanceof Error?e.message:'Recovery storage is unavailable.'); }
       await loadPlants();
     });
-    return () => { if(recoveredUri.current) URL.revokeObjectURL(recoveredUri.current); };
+    return () => {
+      cameraSession.current?.abort();
+      if(recoveredUri.current) URL.revokeObjectURL(recoveredUri.current);
+    };
   },[]);
   function draftFields(id=pendingId,analysis=pendingAnalysis) {
     return { plantId: selected!.id,temperature,humidity,soilType,condition,observedAt,observedTimezone,trackingRef,notes,pendingId:id,pendingAnalysis:analysis };
@@ -128,7 +136,10 @@ export function useJournal() {
       setDraftMessage('Draft restored. Check the photo again before saving. Any uncertain submission keeps its original request ID.');
     });
   }
-  function navigate(next: Screen) { setError(''); setScreen(next); }
+  function navigate(next: Screen) {
+    cameraSession.current?.abort();
+    setError(''); setScreen(next);
+  }
   async function openHistory(next: 'history'|'dashboard',plant=selected) {
     if(!plant) { navigate('plants'); return; }
     if(plant.id!==selected?.id&&!selectPlant(plant)) return;
@@ -139,21 +150,38 @@ export function useJournal() {
     });
   }
   async function pick(camera: boolean) {
-    if(locked) return;
+    if(locked||operation.current||!selected) return;
     if(draftAvailable&&!image) { setError('Restore or explicitly discard the local recovery copy before starting another photo.'); return; }
     await run(async () => {
-      if(camera) {
-        const permission=await ImagePicker.requestCameraPermissionsAsync();
-        if(!permission.granted) throw new Error('Camera permission is needed. You can also select a photo.');
-      }
-      const options: ImagePicker.ImagePickerOptions={ mediaTypes: ['images'],allowsEditing: true,quality: 0.85 };
-      const picked=camera? await ImagePicker.launchCameraAsync(options):await ImagePicker.launchImageLibraryAsync(options);
-      if(!picked.canceled) {
-        clearDraft(); setImage(picked.assets[0]); setImageRevision(value => value+1);
+      setPhotoMessage('');
+      const session=new AbortController();
+      if(camera) cameraSession.current=session;
+      try {
+        const picked=camera
+          ? await (Platform.OS==='web'? captureBrowserPhoto(session.signal):captureNativePhoto())
+          : await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'],allowsEditing: true,quality: 0.85 });
+        if(session.signal.aborted) {
+          if(camera&&Platform.OS==='web'&&!picked.canceled) URL.revokeObjectURL(picked.assets[0].uri);
+          return;
+        }
+        const photo=pickedPhoto(picked);
+        if(!photo) {
+          setPhotoMessage(`${camera? 'Camera capture':'Photo selection'} canceled. ${image? 'Your previous photo is unchanged.':'No photo selected.'}`);
+          return;
+        }
+        clearDraft(); setImage(photo); setImageRevision(value => value+1);
+        if(camera&&Platform.OS==='web') recoveredUri.current=photo.uri;
         const captured=captureObservation();
         setObservedAt(captured.observedAt); setObservedTimezone(captured.observedTimezone);
+        setPhotoMessage('Review your photo, then use it to check file and plant suitability. Nothing has been uploaded yet.');
+      } finally {
+        if(cameraSession.current===session) cameraSession.current=null;
       }
     });
+  }
+  function cancelPhoto() {
+    if(locked||operation.current) return;
+    clearDraft(); setPhotoMessage('Photo canceled. No saved observation was deleted.');
   }
   async function validateImage() {
     if(!image||busy) return;
@@ -229,7 +257,7 @@ export function useJournal() {
     analysisBlockers: [...(pendingPlant? ['Finish the pending plant save in My Plants first.']:[]),...scanBlockers({ busy,selected,image,validation,suitability,health,pendingAnalysis,temperature,humidity,soilType,condition },true)],
     recordBlockers: [...(pendingPlant? ['Finish the pending plant save in My Plants first.']:[]),...scanBlockers({ busy,selected,image,validation,suitability,health,pendingAnalysis,temperature,humidity,soilType,condition },false)],
     health,screen,plants,selected,records,observations,progress,progressRef,result,
-    name,setName,cropName,setCropName,image,imageRevision,validation,suitability,temperature,setTemperature,
+    name,setName,cropName,setCropName,image,imageRevision,photoMessage,cancelPhoto,validation,suitability,temperature,setTemperature,
     pendingPlant,discardPendingPlant: () => { if(!busy) setPendingPlant(null); },
     humidity,setHumidity,soilType,setSoilType,condition,setCondition,observedAt,observedTimezone,
     trackingRef,setTrackingRef,notes,setNotes,pendingId,pendingAnalysis,busy,error,locked,navigate,

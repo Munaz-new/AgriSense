@@ -1,6 +1,6 @@
 import React from 'react';
 import { isTomato } from '../recordState';
-import { Image,Text,View } from 'react-native';
+import { Image,Platform,Text,View } from 'react-native';
 import { Journal } from '../hooks/useJournal';
 import { SoilCondition } from '../api';
 import { s } from '../theme';
@@ -36,11 +36,14 @@ export function ScanScreen({ j }: { j: Journal; }) {
           <Text style={s.body}>Bring your plant into focus</Text>
           <Text style={s.muted}>Use a clear, well-lit photo.</Text>
         </View>}
-        <Button title="Capture plant photo" icon="scan" disabled={j.locked||!j.selected} onPress={() => void j.pick(true)} />
-        <Button title="Select from photos" secondary disabled={j.locked||!j.selected} onPress={() => void j.pick(false)} />
+        <Button title={j.image? 'Retake Photo':'Take Photo'} icon="scan" disabled={j.locked||!j.selected} onPress={() => void j.pick(true)} />
+        <Button title="Choose from Gallery" secondary disabled={j.locked||!j.selected} onPress={() => void j.pick(false)} />
+        {j.image&&<Button title="Cancel photo" secondary disabled={j.locked} onPress={j.cancelPhoto} />}
+        {!!j.photoMessage&&<Text accessibilityLiveRegion="polite" style={s.notice}>{j.photoMessage}</Text>}
+        {Platform.OS==='web'&&<Text style={s.muted}>Live camera requires browser permission and HTTPS or localhost. On a phone using a plain HTTP laptop address, use the native app or Choose from Gallery.</Text>}
         <Text style={s.muted}>JPEG, PNG or WebP · up to 10 MB. Minimum 224 × 224 pixels; maximum 8192 per side and 24 MP.</Text>
         {j.image&&<Text style={s.notice}>Photo selected: {j.image.fileName||'Selected image'} · {j.validation?.is_valid? 'File validation passed':'File validation required'}</Text>}
-        {j.image&&<Button title="Check file and plant suitability" secondary disabled={j.busy} onPress={() => void j.validateImage()} />}
+        {j.image&&<Button title="Use photo — check file and plant suitability" secondary disabled={j.busy} onPress={() => void j.validateImage()} />}
         {j.image&&j.draftRecoverySupported&&<Button title="Keep draft on this browser" secondary disabled={j.locked} onPress={() => void j.keepDraft()} />}
         {j.draftRecoverySupported&&<Text style={s.muted}>Saving keeps a local photo and form recovery copy on this browser until the server confirms the save. Use one AgriSense tab; avoid shared devices. Browser data clearing removes this copy.</Text>}
         {j.validation&&!j.validation.is_valid&&<Text style={s.error}>Image rejected — file validation failed</Text>}
