@@ -5,10 +5,18 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
-    "plugins": [["expo-image-picker", {
-      "photosPermission": "Select a leaf image for an AgriSense observation.",
-      "cameraPermission": "Capture a leaf image for an AgriSense observation.",
-      "microphonePermission": false
-    }]]
+    "android": {
+      "package": "com.munaz.agrisense",
+      "versionCode": 1,
+      "permissions": ["android.permission.CAMERA"]
+    },
+    "plugins": [
+      "./plugins/withReleaseSigning",
+      ["expo-image-picker", {
+        "photosPermission": "Select a leaf image for an AgriSense observation.",
+        "cameraPermission": "Capture a leaf image for an AgriSense observation.",
+        "microphonePermission": false
+      }]
+    ]
   }
 }

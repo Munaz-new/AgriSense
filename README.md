@@ -11,6 +11,8 @@ The [Phase 8 phone-analysis diagnosis](docs/phase8-phone-analysis.md) documents 
 native localhost guard, upload/error diagnostics, real-model checks and current
 phone startup commands. The [Phase 9 security and deployment readiness report](docs/phase9-deployment-readiness.md)
 documents the public-launch blockers, production configuration and hosting fit.
+The [Phase 11 security verification and Android release readiness report](docs/phase11-android-release-readiness.md)
+records the ownership gap, APK build blockers, and checks for a standalone release.
 
 Expo + React Native + TypeScript, FastAPI, and SQLite. The app supports both
 record-only plant journaling and explicit tomato-leaf analysis using the evaluated
