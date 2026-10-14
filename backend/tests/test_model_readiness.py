@@ -136,7 +136,9 @@ def test_inference_failure_returns_503_without_saving_or_fallback(tmp_path):
                                    data={'request_id': 'test-request-001', 'temperature': 25, 'humidity': 65, 'soil_type': 'Loamy',
                                          'soil_condition': 'Normal'})
             assert response.status_code == 503
-            assert response.json() == {'detail': 'Prediction service unavailable. No observation was saved.'}
+            assert response.json()['detail']['code'] == 'inference_failed'
+            assert 'No observation was saved.' in response.json()['detail']['message']
+            assert 'private internal model error' not in response.text
         assert predictor.calls == 2
         assert client.get(f'/plants/{plant_id}/observations').json() == []
         assert list(uploads.iterdir()) == []

@@ -1,0 +1,12 @@
+# Runtime-only inference API dependencies. Intentionally excludes pytest/httpx.
+# On CPU hosts install torch/torchvision from the PyTorch CPU index first; the
+# Dockerfile does this explicitly, then this file validates the pinned versions.
+fastapi==0.135.1
+uvicorn==0.41.0
+python-multipart==0.0.22
+Pillow==12.3.0
+torch==2.14.0
+torchvision==0.29.0
+numpy==2.5.2
+pydantic==2.13.5
+open_clip_torch==2.32.0

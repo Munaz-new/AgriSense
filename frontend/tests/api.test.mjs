@@ -190,6 +190,16 @@ for (const url of ['', 'http://localhost:8000', 'http://127.0.0.1:8000', 'http:/
   });
 }
 
+test('native client accepts a configured HTTPS production API URL', async () => {
+  const { api, requests } = client(undefined, 'android', {
+    url: 'https://api.example.test',
+    File: class { exists = true; size = 123; type = 'image/jpeg'; },
+  });
+  await api.validateImage({ uri: 'content://media/images/production-test' });
+  assert.equal(requests[0].url, 'https://api.example.test/validate-image');
+  assert.equal(requests[0].transport, 'xhr');
+});
+
 test('web loopback and explicitly configured native LAN backend remain usable', async () => {
   for (const [platform, url] of [['web', 'http://localhost:8000/'], ['android', 'http://192.168.1.50:8000/']]) {
     const { api, requests } = client(undefined, platform, { url });

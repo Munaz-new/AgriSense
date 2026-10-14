@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 import os
 import logging
+from urllib.parse import urlsplit
 from threading import Lock
 from pathlib import Path
 from typing import Annotated, Literal
@@ -10,6 +11,7 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 from fastapi import FastAPI, File, Form, HTTPException, Query, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 from starlette.concurrency import run_in_threadpool
 
@@ -93,8 +95,30 @@ def create_app(database_path: Path | None = None, upload_dir: Path | None = None
                validator: PlantImageValidator | None = None,
                checkpoint_path: Path | None = None,
                plant_verifier: PlantContentVerifier | None = None) -> FastAPI:
+    production = os.getenv('AGRISENSE_ENV', 'development').strip().lower() == 'production'
     database_path = database_path or Path(os.getenv("AGRISENSE_DB_PATH", ROOT / "database/agrisense.db"))
     upload_dir = upload_dir or Path(os.getenv("AGRISENSE_UPLOAD_DIR", ROOT / "backend/uploads"))
+    configured_hosts = []
+    if production:
+        configured_hosts = [host.strip() for host in os.getenv('AGRISENSE_ALLOWED_HOSTS', '').split(',') if host.strip()]
+        if not configured_hosts or '*' in configured_hosts:
+            raise RuntimeError('Production requires explicit AGRISENSE_ALLOWED_HOSTS; wildcard hosts are forbidden.')
+        for name, path in (('AGRISENSE_DB_PATH', database_path), ('AGRISENSE_UPLOAD_DIR', upload_dir)):
+            resolved_path = path.resolve()
+            if not path.is_absolute() or resolved_path == ROOT.resolve() or ROOT.resolve() in resolved_path.parents:
+                raise RuntimeError(f'Production requires {name} to be an absolute persistent path outside the source tree.')
+        configured_origins = [origin.strip() for origin in os.getenv('AGRISENSE_CORS_ORIGINS', '').split(',') if origin.strip()]
+        if any(
+            origin == '*' or
+            (parsed := urlsplit(origin)).scheme != 'https' or not parsed.hostname or
+            parsed.path not in ('', '/') or parsed.query or parsed.fragment or parsed.username or parsed.password
+            for origin in configured_origins
+        ):
+            raise RuntimeError('Production browser CORS origins must be exact HTTPS origins; native apps need no CORS entry.')
+        for name in ('AGRISENSE_CHECKPOINT_PATH', 'AGRISENSE_PLANT_VERIFIER_WEIGHTS'):
+            artifact = Path(os.getenv(name, ''))
+            if not artifact.is_absolute() or not artifact.is_file():
+                raise RuntimeError(f'Production requires an existing absolute {name}; model downloads are disabled.')
     configured_checkpoint = checkpoint_path or Path(os.getenv(
         "AGRISENSE_CHECKPOINT_PATH", ROOT / "model/checkpoints/tomato_gpu_epoch5_retry2/best.pt"))
     if not configured_checkpoint.is_absolute():
@@ -127,9 +151,11 @@ def create_app(database_path: Path | None = None, upload_dir: Path | None = None
         yield
 
     app = FastAPI(title="AgriSense: Plant Disease Detection and Health Monitoring Using Hybrid CNN-Transformer Architecture", lifespan=lifespan,
-                  description="Local plant observation journal. Record-only saving requires no model.")
+                  description="Local plant observation journal. Record-only saving requires no model.",
+                  docs_url=None if production else '/docs', redoc_url=None if production else '/redoc',
+                  openapi_url=None if production else '/openapi.json')
     origins = [origin.strip() for origin in os.getenv(
-        'AGRISENSE_CORS_ORIGINS', 'http://localhost:8081,http://127.0.0.1:8081').split(',') if origin.strip()]
+        'AGRISENSE_CORS_ORIGINS', '' if production else 'http://localhost:8081,http://127.0.0.1:8081').split(',') if origin.strip()]
     app.add_middleware(LocalRequestBoundary, allowed_origins=origins)
     app.add_middleware(
         CORSMiddleware,
@@ -137,7 +163,12 @@ def create_app(database_path: Path | None = None, upload_dir: Path | None = None
         allow_methods=["GET", "POST"], allow_headers=["Content-Type"],
     )
     app.add_middleware(RequestDiagnostics)
-    app.mount("/uploads", StaticFiles(directory=upload_dir), name="uploads")
+    if production:
+        app.add_middleware(TrustedHostMiddleware, allowed_hosts=configured_hosts)
+    # Stored image files are private journal content. Until authenticated,
+    # owner-scoped photo delivery exists, production mode must not expose them.
+    if not production:
+        app.mount("/uploads", StaticFiles(directory=upload_dir), name="uploads")
 
     def require_plant(plant_id: str):
         with connect(database_path) as db:
@@ -160,6 +191,19 @@ def create_app(database_path: Path | None = None, upload_dir: Path | None = None
                                      "plant content screening enabled; results remain uncertain. Severity is unavailable." if ready and screening_ready else
                                      "Tomato analysis unavailable because the tomato model or plant-content screening is unavailable. You can still save without analysis." if ready else
                                      "Tomato analysis unavailable. You can still save without analysis.")}
+
+    @app.get('/ready')
+    def ready():
+        model_ready = isinstance(predictor, TrainedTomatoPredictor) and plant_verifier is not None
+        try:
+            with connect(database_path) as db:
+                db.execute('SELECT 1')
+            database_ready = True
+        except Exception:
+            database_ready = False
+        if not database_ready or not model_ready:
+            return Response(content='Not ready', status_code=503, media_type='text/plain')
+        return {'status': 'ready'}
 
 
     @app.post("/plants", response_model=Plant, status_code=201)

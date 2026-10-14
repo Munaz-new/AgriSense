@@ -1,15 +1,16 @@
 # AgriSense: Plant Disease Detection and Health Monitoring Using Hybrid CNN-Transformer Architecture
 
-**October 13 submission status: PARTIALLY READY.** The real-model API, persistence,
-backup/restore and automated checks pass. Full browser photo selection/recovery
-and physical Android testing remain unverified. See the
+**October 14 readiness: not safe for public deployment.** The owner reports that
+the real Android camera-to-history workflow passes; Phase 9 has not repeated device
+testing. The API still lacks authentication and per-user record ownership. See the
 [final submission runbook and October 13 verification](docs/final-submission-2026-10-12.md).
 The [Phase 7B–7E report](docs/phase7-local-readiness.md) preserves earlier evidence.
 The [phone-camera integration guide](docs/phone-camera-integration.md) covers the
 current native/browser capture flow, automated checks and Android test instructions.
 The [Phase 8 phone-analysis diagnosis](docs/phase8-phone-analysis.md) documents the
 native localhost guard, upload/error diagnostics, real-model checks and current
-phone startup commands. Physical Android verification is still required.
+phone startup commands. The [Phase 9 security and deployment readiness report](docs/phase9-deployment-readiness.md)
+documents the public-launch blockers, production configuration and hosting fit.
 
 Expo + React Native + TypeScript, FastAPI, and SQLite. The app supports both
 record-only plant journaling and explicit tomato-leaf analysis using the evaluated
