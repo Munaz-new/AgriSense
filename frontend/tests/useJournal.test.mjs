@@ -502,3 +502,19 @@ test('web capture object URL is released when its preview is canceled',async()=>
   assert.equal(await (await fetch(render().image.uri)).text(),'fixture-photo');
   render().cancelPhoto();await assert.rejects(fetch(uri));
 });
+
+test('native successful analysis shows the server result and retains it in refreshed history', async () => {
+  const saved = { id:'native-saved', plant_id:'p', disease:'Early_blight', confidence:72.5,
+    prediction_score:72.5, severity:null, is_mock:false, analysis_status:'completed', created_at:'2026-01-01' };
+  let history = [];
+  const render = journalHarness(scanApi({ observations:async()=>history, progression:async()=>({status:'unavailable'}),
+    scan:async(id, image)=>{ assert.equal(image.uri,'file:///native.jpg'); history=[saved]; return saved; } }), {
+    getCameraPermissionsAsync:async()=>({granted:true}),
+    launchCameraAsync:async()=>({canceled:false,assets:[{uri:'file:///native.jpg',width:1200,height:1600}]}),
+  });
+  await render().refresh(); await render().pick(true); await render().validateImage(); await render().saveRecord(true);
+  assert.equal(render().screen,'result'); assert.equal(render().result,saved);
+  assert.equal(render().pendingId,null); assert.equal(render().image,null);
+  await render().openHistory('history'); assert.deepEqual(render().observations,[saved]);
+  assert.equal(render().result.severity,null); assert.equal(render().result.confidence,72.5);
+});

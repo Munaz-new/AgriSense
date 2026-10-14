@@ -22,6 +22,7 @@ from .image_validation import (MAX_IMAGE_BYTES, PlantImageValidator, TechnicalPl
 from .plant_suitability import PlantContentVerifier, Suitability
 from .startup import startup_stage
 from .request_limits import LocalRequestBoundary
+from .diagnostics import RequestDiagnostics, event, stage
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -135,6 +136,7 @@ def create_app(database_path: Path | None = None, upload_dir: Path | None = None
         allow_origins=origins,
         allow_methods=["GET", "POST"], allow_headers=["Content-Type"],
     )
+    app.add_middleware(RequestDiagnostics)
     app.mount("/uploads", StaticFiles(directory=upload_dir), name="uploads")
 
     def require_plant(plant_id: str):
@@ -199,9 +201,13 @@ def create_app(database_path: Path | None = None, upload_dir: Path | None = None
         return progression(observations(plant_id), tracking_ref.strip() if tracking_ref else None)
 
     async def validated_image(upload: UploadFile) -> tuple[bytes, ValidationResult]:
-        data = await read_image(upload)
-        validation = validator.validate(data)
+        with stage('upload_read'):
+            data = await read_image(upload)
+        event('upload_received', bytes=len(data))
+        with stage('image_validation'):
+            validation = await run_in_threadpool(validator.validate, data)
         if not validation.is_valid:
+            event('image_rejected', reason=validation.reason)
             status = 413 if validation.reason == "image_too_large" else (
                 415 if validation.reason in {"unsupported_format", "invalid_image"} else 422)
             raise HTTPException(status, detail=validation.model_dump())
@@ -209,12 +215,17 @@ def create_app(database_path: Path | None = None, upload_dir: Path | None = None
 
     def check_suitability(data: bytes):
         if plant_verifier is None:
-            raise PredictionUnavailableError('Plant-content screening is unavailable')
+            raise HTTPException(503, detail={"code": "plant_screening_unavailable", "message":
+                "Plant suitability screening is unavailable. No analysis or save was performed. Refresh model status and retry."})
         try:
-            suitability = plant_verifier.verify(data)
+            with stage('plant_screening'):
+                suitability = plant_verifier.verify(data)
         except Exception as error:
             logging.getLogger(__name__).error('Plant-content screening failed: %s', type(error).__name__)
-            raise PredictionUnavailableError('Plant-content screening failed') from error
+            raise HTTPException(503, detail={"code": "plant_screening_unavailable", "message":
+                "Plant suitability screening failed. No analysis or save was performed. Refresh model status and retry."}) from error
+        event('screening_result', outcome=suitability.outcome.value,
+              plant_similarity=suitability.plant_similarity, unrelated_similarity=suitability.unrelated_similarity)
         if suitability.outcome == Suitability.NON_PLANT:
             raise HTTPException(422, detail={"code": "non_plant_image", "message": suitability.message})
         if suitability.outcome != Suitability.PLANT:
@@ -227,23 +238,22 @@ def create_app(database_path: Path | None = None, upload_dir: Path | None = None
         def check():
             with inference_lock:
                 return check_suitability(data)
-        try:
-            return await run_in_threadpool(check)
-        except PredictionUnavailableError as error:
-            raise HTTPException(503, detail={"code": "plant_screening_unavailable", "message":
-                "Plant suitability screening is unavailable. No analysis or save was performed. Try again after refreshing model status."}) from error
+        return await run_in_threadpool(check)
 
     def predict_image(data: bytes) -> Prediction:
         try:
             with inference_lock:
                 if predictor is None:
-                    raise PredictionUnavailableError('Model not loaded')
+                    raise HTTPException(503, detail={"code": "model_unavailable", "message":
+                        "Tomato model is unavailable. No observation was saved. Refresh model status before retrying."})
                 if plant_verifier is not None or isinstance(predictor, TrainedTomatoPredictor):
                     check_suitability(data)
-                return predictor.predict(data)
+                with stage('tomato_inference'):
+                    return predictor.predict(data)
         except PredictionUnavailableError as error:
             # Do not leak model paths/errors, substitute a mock, or persist a failed scan.
-            raise HTTPException(503, 'Prediction service unavailable. No observation was saved.') from error
+            raise HTTPException(503, detail={"code": "inference_failed", "message":
+                "Tomato inference failed. No observation was saved. Check backend logs, refresh model status and retry."}) from error
 
     @app.post("/validate-image", response_model=ValidationResult)
     async def validate_image(image: Annotated[UploadFile, File()]):
@@ -312,7 +322,8 @@ def create_app(database_path: Path | None = None, upload_dir: Path | None = None
     ):
         plant = require_plant(plant_id)
         if (plant['crop_name'] or '').strip().lower() != 'tomato':
-            raise HTTPException(422, 'Analysis supports tomato plants only. Set crop to tomato or save without analysis.')
+            raise HTTPException(422, detail={"code": "unsupported_crop", "message":
+                "Analysis supports tomato plants only. Select a plant known to be tomato, or save without analysis. The image screen does not identify species."})
         soil_type = soil_type.strip() if soil_type is not None else None
         if soil_type == "":
             raise HTTPException(422, "Soil type cannot be blank.")
@@ -337,6 +348,7 @@ def create_app(database_path: Path | None = None, upload_dir: Path | None = None
             raise HTTPException(409, str(error)) from error
         if replay:
             response.status_code = 200
+        event('observation_saved', replay=replay)
         return saved
 
     return app

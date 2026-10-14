@@ -7,6 +7,9 @@ and physical Android testing remain unverified. See the
 The [Phase 7B–7E report](docs/phase7-local-readiness.md) preserves earlier evidence.
 The [phone-camera integration guide](docs/phone-camera-integration.md) covers the
 current native/browser capture flow, automated checks and Android test instructions.
+The [Phase 8 phone-analysis diagnosis](docs/phase8-phone-analysis.md) documents the
+native localhost guard, upload/error diagnostics, real-model checks and current
+phone startup commands. Physical Android verification is still required.
 
 Expo + React Native + TypeScript, FastAPI, and SQLite. The app supports both
 record-only plant journaling and explicit tomato-leaf analysis using the evaluated

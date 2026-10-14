@@ -12,6 +12,7 @@ import os
 import logging
 
 from PIL import Image, ImageOps
+from .diagnostics import event
 
 
 class Suitability(str, Enum):
@@ -114,6 +115,7 @@ class PlantContentVerifier:
             raise RuntimeError("Plant-content screening failed.") from error
 
         plant, unrelated, margin = margins[0]
+        event('screening_margins', full=round(margin, 5), center=round(margins[1][2], 5), threshold=self.CLEAR_MARGIN)
         if all(m[2] >= self.CLEAR_MARGIN for m in margins):
             return SuitabilityResult(
                 Suitability.PLANT,

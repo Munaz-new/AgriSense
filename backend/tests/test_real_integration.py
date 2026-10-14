@@ -99,7 +99,9 @@ def test_scope_and_validation_precede_inference(serving):
     client, _, _, instances, *_ = serving
     other = client.post('/plants', json={'name': 'Other', 'crop_name': 'potato'}).json()['id']
     changed = list(serving); changed[1] = other
-    assert submit(changed).status_code == 422
+    rejected = submit(changed)
+    assert rejected.status_code == 422
+    assert rejected.json()['detail']['code'] == 'unsupported_crop'
     assert submit(changed, route='records').status_code == 201
     changed = list(serving); changed[2] = b'broken image'
     assert submit(changed).status_code == 415
@@ -114,6 +116,30 @@ def test_failed_inference_no_row_no_file_and_record_only_still_works(serving):
     assert client.get(f'/plants/{plant}/observations').json() == []
     assert list(uploads.iterdir()) == []
     assert submit(serving, key='record-only-001', route='records').status_code == 201
+
+
+def test_inference_failure_is_distinct_and_retry_persists_once(serving, caplog):
+    import logging
+    caplog.set_level(logging.INFO, logger='uvicorn.error')
+    client, plant, _, instances, _, uploads = serving
+    original = instances[0].predict
+    instances[0].predict = Mock(side_effect=PredictionUnavailableError('private inference details'))
+    failed = submit(serving, key='camera-retry-001', notes='private observation notes')
+    assert failed.status_code == 503
+    assert failed.json()['detail']['code'] == 'inference_failed'
+    assert client.get(f'/plants/{plant}/observations').json() == []
+    assert list(uploads.iterdir()) == []
+    instances[0].predict = original
+    saved = submit(serving, key='camera-retry-001', notes='private observation notes')
+    assert saved.status_code == 201
+    assert submit(serving, key='camera-retry-001', notes='private observation notes').json() == saved.json()
+    assert client.get(f'/plants/{plant}/observations').json() == [saved.json()]
+    assert len(list(uploads.iterdir())) == 1
+    assert saved.headers['x-agrisense-request-id'] != failed.headers['x-agrisense-request-id']
+    for name in ['upload_received', 'image_validation', 'plant_screening', 'tomato_inference', 'observation_saved']:
+        assert f'stage={name}' in caplog.text
+    for private in ['private inference details', 'private observation notes', plant, 'leaf.png']:
+        assert private not in caplog.text
 
 
 def test_startup_failure_is_not_retried_per_request(tmp_path, monkeypatch):

@@ -2,7 +2,7 @@ import React from 'react';
 import { isTomato } from '../recordState';
 import { Image,Platform,Text,View } from 'react-native';
 import { Journal } from '../hooks/useJournal';
-import { SoilCondition } from '../api';
+import { API_URL,SoilCondition } from '../api';
 import { s } from '../theme';
 import { Button,Field,Title,Empty,Badge } from '../components/UI';
 import { PlantPicker } from '../components/PlantPicker';
@@ -18,6 +18,7 @@ export function ScanScreen({ j }: { j: Journal; }) {
     {!!j.draftMessage&&<Text accessibilityLiveRegion="polite" style={s.notice}>{j.draftMessage}</Text>}
     <Badge>{j.health?.capabilities.tomato_analysis? 'Tomato model available':'Photo record · analysis unavailable'}</Badge>
     <Text style={s.notice}>{j.health?.analysis_message||'Connect to the backend to check analysis availability.'}</Text>
+    <Text style={s.muted}>Backend: {API_URL}</Text>
     <Button title="Refresh connection and model status" secondary disabled={j.busy} onPress={() => void j.refresh()} />
     {!isTomato(j.selected)&&<View style={s.card}>
       <Text style={s.notice}>Tomato analysis needs a plant explicitly identified with crop “tomato”. A plant name alone does not set its crop.</Text>
@@ -43,7 +44,8 @@ export function ScanScreen({ j }: { j: Journal; }) {
         {Platform.OS==='web'&&<Text style={s.muted}>Live camera requires browser permission and HTTPS or localhost. On a phone using a plain HTTP laptop address, use the native app or Choose from Gallery.</Text>}
         <Text style={s.muted}>JPEG, PNG or WebP · up to 10 MB. Minimum 224 × 224 pixels; maximum 8192 per side and 24 MP.</Text>
         {j.image&&<Text style={s.notice}>Photo selected: {j.image.fileName||'Selected image'} · {j.validation?.is_valid? 'File validation passed':'File validation required'}</Text>}
-        {j.image&&<Button title="Use photo — check file and plant suitability" secondary disabled={j.busy} onPress={() => void j.validateImage()} />}
+        {j.image&&<Button title={j.error? 'Retry photo checks':'Use photo — check file and plant suitability'} secondary disabled={j.busy} onPress={() => void j.validateImage()} />}
+        {j.image&&j.error&&<Text accessibilityRole="alert" style={s.error}>{j.error}</Text>}
         {j.image&&j.draftRecoverySupported&&<Button title="Keep draft on this browser" secondary disabled={j.locked} onPress={() => void j.keepDraft()} />}
         {j.draftRecoverySupported&&<Text style={s.muted}>Saving keeps a local photo and form recovery copy on this browser until the server confirms the save. Use one AgriSense tab; avoid shared devices. Browser data clearing removes this copy.</Text>}
         {j.validation&&!j.validation.is_valid&&<Text style={s.error}>Image rejected — file validation failed</Text>}
@@ -59,6 +61,7 @@ export function ScanScreen({ j }: { j: Journal; }) {
           {!!j.suitability.message&&<Text style={s.muted}>{j.suitability.message}</Text>}
         </View>}
         <Text style={s.muted}>File validation checks format and dimensions only; both leaves and logos can pass it. Plant suitability is a separate check. Neither step performs disease analysis or saves a record.</Text>
+        <Text style={s.muted}>Use only a plant you know is tomato. The screen cannot verify species or reliably measure blur. An uncertain image may be unclear or outside the model’s experience; retake a close, well-lit leaf photo. Do not change an unsupported plant’s crop just to enable analysis.</Text>
       </View>
       {j.validation?.is_valid&&<View style={s.card}>
         <Text style={s.eyebrow}>02 / Field context</Text>

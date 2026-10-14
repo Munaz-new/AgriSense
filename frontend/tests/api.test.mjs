@@ -5,16 +5,19 @@ import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 
-function client(respond, platform = 'web') {
+function client(respond, platform = 'web', config = {}) {
   const requests = [];
   const source = readFileSync(new URL('../src/api.ts', import.meta.url), 'utf8');
   const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
   const exports = {};
   runInNewContext(compiled, {
-    exports, require: (name) => { assert.equal(name, 'react-native'); return { Platform: { OS: platform } }; },
-    process: { env: { EXPO_PUBLIC_API_URL: 'http://test-only' } },
+    exports, __DEV__: Boolean(config.logs), console: { info: (...args) => config.logs?.push(args) }, require: (name) => {
+      if (name === 'expo-file-system') return { File: config.File || class { exists = true; size = 1234; type = ''; } };
+      assert.equal(name, 'react-native'); return { Platform: { OS: platform } };
+    },
+    process: { env: { EXPO_PUBLIC_API_URL: config.url ?? 'http://test-only' } },
     FormData: platform === 'web' ? FormData : class extends Map { append(key,value) { this.set(key,value); } },
-    Blob, AbortController, setTimeout, clearTimeout, Error, TypeError,
+    Blob, URL, AbortController, setTimeout: config.setTimeout || setTimeout, clearTimeout, Error, TypeError,
     fetch: async (url, options) => {
       requests.push({ url, options });
       if (url === 'fixture-image') return { blob: async () => new Blob(['temporary test bytes'], { type: 'image/png' }) };
@@ -138,4 +141,81 @@ test('browser camera blob bytes survive the existing validation and analysis upl
       for(const key of ['disease','confidence','severity'])assert.equal(options.body.has(key),false);
     }
   } finally {URL.revokeObjectURL(uri);}
+});
+
+for (const url of ['', 'http://localhost:8000', 'http://127.0.0.1:8000', 'http://[::1]:8000', 'http://0.0.0.0:8000', 'not-a-url']) {
+  test(`native API configuration fails before upload: ${url || 'unset'}`, async () => {
+    const { api, requests } = client(undefined, 'android', { url });
+    await assert.rejects(api.validateImage({ uri: 'file:///camera.jpg' }), e => e.code === 'api_configuration' && /EXPO_PUBLIC_API_URL/.test(e.message));
+    assert.equal(requests.length, 0);
+  });
+}
+
+test('web loopback and explicitly configured native LAN backend remain usable', async () => {
+  for (const [platform, url] of [['web', 'http://localhost:8000/'], ['android', 'http://192.168.1.50:8000/']]) {
+    const { api, requests } = client(undefined, platform, { url });
+    await api.health(); assert.equal(requests[0].url, url + 'health');
+  }
+});
+
+for (const [label, file, code] of [
+  ['missing', { exists: false, size: 1 }, 'photo_unavailable'],
+  ['empty', { exists: true, size: 0 }, 'photo_unavailable'],
+  ['oversize', { exists: true, size: 10 * 1024 * 1024 + 1 }, 'upload_too_large'],
+]) test(`native ${label} photo fails locally before any HTTP upload`, async () => {
+  const { api, requests } = client(undefined, 'android', { File: class { constructor() { Object.assign(this, file); } } });
+  await assert.rejects(api.checkSuitability({ uri: 'file:///cache/camera.jpg', fileSize: 123 }), e => e.code === code);
+  assert.equal(requests.length, 0);
+});
+
+test('native file availability is rechecked after a preview and before save', async () => {
+  let exists = true;
+  const { api, requests } = client(undefined, 'android', { File: class { get exists() { return exists; } size = 123; } });
+  const photo = { uri: 'file:///cache/camera.jpg' };
+  await api.validateImage(photo); exists = false;
+  await assert.rejects(api.scan('p', photo, {}, {}), e => e.code === 'photo_unavailable');
+  assert.equal(requests.length, 1);
+});
+
+for (const uri of ['file:///cache/camera.png', 'content://media/images/12']) test(`native filename and MIME fallback preserve ${uri}`, async () => {
+  const { api, requests } = client(undefined, 'android', { File: class { exists = true; size = 123; type = 'image/png'; } });
+  await api.predict({ uri });
+  const file = requests[0].options.body.get('image');
+  assert.equal(file.uri, uri); assert.equal(file.type, 'image/png'); assert.equal(file.name, 'leaf.png');
+  assert.equal(requests[0].options.headers, undefined);
+});
+
+test('native upload failure differs from a backend health connection failure', async () => {
+  const { api } = client(() => { throw new TypeError('Network request failed'); }, 'android');
+  await assert.rejects(api.validateImage({ uri: 'file:///cache/camera.jpg' }), e => e.code === 'upload_failed' && /receipt is unknown/.test(e.message));
+  await assert.rejects(api.health(), e => e.code === 'backend_unreachable' && /changed laptop IP/.test(e.message));
+});
+
+test('actual abort timer distinguishes check timeout from an uncertain save', async () => {
+  const { api } = client((url, options) => new Promise((resolve, reject) => {
+    options.signal.addEventListener('abort', () => { const error = new Error(); error.name = 'AbortError'; reject(error); });
+  }), 'android', { setTimeout: (callback, ms) => { assert.equal(ms, 30000); return setTimeout(callback, 1); } });
+  await assert.rejects(api.checkSuitability({ uri: 'file:///cache/camera.jpg' }), e => e.code === 'request_timeout' && !/may have completed/.test(e.message));
+  await assert.rejects(api.scan('p', { uri: 'file:///cache/camera.jpg' }, {}, {}), /save may have completed/);
+});
+
+for (const code of ['unsupported_crop', 'inference_failed', 'model_unavailable']) test(`server ${code} reaches the user with its reason`, async () => {
+  const { api } = client(() => ({ ok: false, status: 503, json: async () => ({ detail: { code, message: 'Specific backend explanation' } }) }), 'android');
+  await assert.rejects(api.predict({ uri: 'file:///cache/camera.jpg' }), e => e.code === code && /Specific backend explanation/.test(e.message));
+});
+
+test('non-JSON backend failure retains HTTP status; malformed success is not a prediction', async () => {
+  for (const ok of [false, true]) {
+    const { api } = client(() => ({ ok, status: ok ? 200 : 502, json: async () => { throw new SyntaxError('HTML'); } }), 'android');
+    await assert.rejects(api.predict({ uri: 'file:///cache/camera.jpg' }), e => ok ? e.code === 'invalid_response' : /HTTP 502/.test(e.message));
+  }
+});
+
+test('development diagnostics include response reference without photo URI, plant ID or notes', async () => {
+  const logs = [];
+  const { api } = client(() => ({ ok: true, status: 201, headers: new Headers({ 'x-agrisense-request-id': 'safe-reference' }), json: async () => ({ id: 'saved' }) }), 'android', { logs });
+  await api.scan('private-plant-id', { uri: 'file:///private-camera.jpg' }, {}, { notes: 'private notes', request_id: 'private-key' });
+  const output = JSON.stringify(logs);
+  assert.match(output, /safe-reference/); assert.match(output, /\/plants\/:id\/observations/);
+  for (const value of ['private-plant-id', 'private-camera', 'private notes', 'private-key']) assert.ok(!output.includes(value));
 });

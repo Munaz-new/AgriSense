@@ -45,6 +45,16 @@ test('record-only and historical mock cards do not render treatment guidance', (
   }
 });
 
+test('Scan renders backend address, actual error and a photo-check retry without a prediction', () => {
+  const { ScanScreen } = load(resolve(root, 'screens/ScanScreen.tsx'));
+  const j = { plants:[{id:'p',crop_name:'tomato'}], selected:{id:'p',crop_name:'tomato'},
+    image:{uri:'file:///camera.jpg'}, suitability:{status:'unavailable',message:'Screening unavailable'},
+    validation:null, error:'Photo upload failed; backend receipt is unknown.' };
+  const html = renderToStaticMarkup(React.createElement(ScanScreen, {j}));
+  for (const text of ['Backend: http://test-only','Photo upload failed; backend receipt is unknown.','Retry photo checks']) assert.ok(html.includes(text));
+  assert.ok(!html.includes('Disease analysis completed'));
+});
+
 test('Home reports current backend availability rather than hardcoded future availability', () => {
   const { HomeScreen } = load(resolve(root, 'screens/HomeScreen.tsx'));
   const j = { records: {}, plants: [], selected: null, health: { analysis_message: 'Tomato classification available.', capabilities: { record_only: true } } };

@@ -123,8 +123,15 @@ def test_real_models_reject_logo_and_save_tomato_leaf_prediction(tmp_path):
             assert list((tmp_path / 'real-uploads').iterdir()) == []
             predictor.predict.assert_not_called()
         saved_rows = []
-        for filename in ['tomato_leaf_bacterial_spot.jpg', 'tomato_leaf_healthy.jpg']:
-            leaf = (FIXTURES / filename).read_bytes()
+        examples = [(name, (FIXTURES / name).read_bytes()) for name in
+                    ['tomato_leaf_bacterial_spot.jpg', 'tomato_leaf_healthy.jpg']]
+        # Simulate phone-sized JPEG bytes with EXIF rotation, not a physical capture.
+        with Image.open(BytesIO(examples[1][1])) as original:
+            rotated = original.resize((2048, 2048)).rotate(90, expand=True)
+            exif = rotated.getexif(); exif[274] = 6
+            encoded = BytesIO(); rotated.save(encoded, 'JPEG', quality=85, exif=exif)
+        examples.append(('camera-oriented.jpg', encoded.getvalue()))
+        for filename, leaf in examples:
             files = {"image": (filename, leaf, "image/jpeg")}
             assert client.post('/validate-image', files=files).json()['is_valid']
             assert client.post('/check-plant-suitability', files=files).json()['outcome'] == 'plant'
@@ -135,13 +142,14 @@ def test_real_models_reject_logo_and_save_tomato_leaf_prediction(tmp_path):
             assert saved["analysis_status"] == "completed" and saved["is_mock"] is False
             assert saved["disease"] and saved["prediction_score"] is not None
             assert saved["checkpoint_id"] == predictor.checkpoint_id
+            assert saved['severity'] is None
             assert client.get(saved['image_path']).content == leaf
             saved_rows.append(saved)
             replay = client.post(route, files=files, data=fields)
             assert replay.status_code == 200 and replay.json() == saved
         assert client.get(route).json() == saved_rows
-        assert predictor.predict.call_count == 2
-        assert len(list((tmp_path/'real-uploads').iterdir())) == 2
+        assert predictor.predict.call_count == len(examples)
+        assert len(list((tmp_path/'real-uploads').iterdir())) == len(examples)
 
 
 @pytest.mark.parametrize('outcome, status', [(Suitability.PLANT, 200), (Suitability.NON_PLANT, 422), (Suitability.INCONCLUSIVE, 422)])
@@ -176,6 +184,7 @@ def test_screening_failure_logs_error_and_never_classifies_or_saves(tmp_path, ca
         for route in ['/check-plant-suitability', '/predict', f'/plants/{plant}/observations']:
             response = client.post(route, data={'request_id': 'screen-failure-001'}, files={'image': ('leaf.jpg', leaf)})
             assert response.status_code == 503
+            assert response.json()['detail']['code'] == 'plant_screening_unavailable'
             assert 'private verifier failure' not in response.text
         assert predictor.calls == 0
         assert client.get(f'/plants/{plant}/observations').json() == []
