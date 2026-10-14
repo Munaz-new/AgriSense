@@ -201,7 +201,9 @@ export function useJournal() {
         setSuitability({ status: 'accepted',message: screened.message });
       } catch(e) {
         if(version!==draftVersion.current) return;
-        if(!(e instanceof ImageValidationError)) setSuitability({ status: 'unavailable',message: e instanceof Error? e.message:'Suitability check failed.' });
+        // Only a server screening response can describe suitability. Transport,
+        // file and configuration errors leave suitability unknown, never rejected.
+        if(!(e instanceof PlantSuitabilityError)) setSuitability({ status: 'not_checked',message: 'Photo checks did not complete. Resolve the error and retry; plant suitability has not been determined.' });
         throw e;
       }
     });

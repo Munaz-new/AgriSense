@@ -1,6 +1,7 @@
 import { Platform } from 'react-native';
 import { File } from 'expo-file-system';
 import type { ImagePickerAsset } from 'expo-image-picker';
+import { nativeMultipartUpload, NativeUploadError } from './nativeMultipartUpload';
 
 export const API_URL = (process.env.EXPO_PUBLIC_API_URL || 'http://localhost:8000').trim().replace(/\/+$/, '');
 export class ApiError extends Error {
@@ -60,7 +61,9 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const timeout = setTimeout(() => controller.abort(), 30000);
   try {
     diagnostic('started');
-    const response = await fetch(`${API_URL}${path}`, { ...options, signal: controller.signal });
+    const response = Platform.OS !== 'web' && options?.body instanceof FormData
+      ? await nativeMultipartUpload(`${API_URL}${path}`, options.body, controller.signal)
+      : await fetch(`${API_URL}${path}`, { ...options, signal: controller.signal });
     const reference = response.headers?.get('x-agrisense-request-id') || undefined;
     diagnostic('response', response.status, reference);
     if (!response.ok) {
@@ -81,6 +84,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
       throw new ApiError('invalid_response', `Backend returned an invalid response for ${path}. Check the API address and backend logs. If saving, check history before retrying.`);
     }
   } catch (error) {
+    if (error instanceof NativeUploadError) throw new ApiError('upload_failed', error.message);
     diagnostic(error instanceof ApiError || error instanceof PlantSuitabilityError ? error.code : error instanceof ImageValidationError ? 'image_validation_failed' : error instanceof Error && error.name === 'AbortError' ? 'timeout' : 'request_failed');
     const saving = options?.method === 'POST' && (path === '/plants' || /\/plants\/[^/]+\/(records|observations)$/.test(path));
     const recovery = saving ? ' Refresh history before retrying; the save may have completed. Retry the same submission.' : ' Refresh connection status and retry.';

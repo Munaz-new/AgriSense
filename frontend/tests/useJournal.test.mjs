@@ -518,3 +518,18 @@ test('native successful analysis shows the server result and retains it in refre
   await render().openHistory('history'); assert.deepEqual(render().observations,[saved]);
   assert.equal(render().result.severity,null); assert.equal(render().result.confidence,72.5);
 });
+
+test('upload serialization error stays a photo-check error; retry can then pass screening', async () => {
+  let failing=true;
+  const render=journalHarness(scanApi({checkSuitability:async()=>{
+    if(failing) throw new Error('Unsupported FormDataPart implementation');
+    return {outcome:'plant',message:'Plant content supported'};
+  }}));
+  await render().refresh(); await render().pick(false); await render().validateImage();
+  assert.equal(render().suitability.status,'not_checked');
+  assert.match(render().error,/Unsupported FormDataPart implementation/);
+  assert.match(render().suitability.message,/not been determined/);
+  failing=false; await render().validateImage();
+  assert.equal(render().suitability.status,'accepted');
+  assert.equal(render().error,'');
+});

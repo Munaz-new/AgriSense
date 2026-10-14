@@ -13,10 +13,14 @@ phone log or active Expo environment override was supplied during this investiga
   the phone in Expo Go, so this configuration cannot reach the laptop backend.
   A shell override could explain why a particular phone session reached screening;
   the exact cause of that session's rejection remains unknown.
-- URI-backed native multipart construction was already correct. It did not set a
-  manual multipart Content-Type/boundary. However, it trusted picker metadata without
-  checking whether the cached file still existed, and defaulted missing MIME/name
-  to JPEG even when the format was unknown.
+- The native `{ uri, name, type }` photo part was correct, but Expo SDK 57's global
+  `fetch` could not serialize it. Expo's WinterCG multipart converter explicitly
+  throws `Unsupported FormDataPart implementation` for that React Native part; its
+  own test covers the failure. Thus file validation and screening failed before
+  reaching FastAPI. The later “Plant suitability unavailable” label obscured the
+  upload error. This exact report supersedes the earlier uncertain diagnosis.
+- The client also trusted picker metadata without checking if the cached photo file
+  still existed. It could default missing MIME/name to JPEG despite unknown bytes.
 - Screening failures inside analysis were flattened to a generic prediction-service
   failure. Structured errors other than the three screening codes lost their message
   in the client. Network failures did not identify the failing endpoint, and every
@@ -42,6 +46,14 @@ Scan displays the configured backend address. A stale but syntactically valid LA
 cannot be detected offline: connection errors direct the user to open `/health` on
 the phone and check Wi-Fi, the current laptop IP, firewall and backend bind address.
 The ignored local `.env` is not committed or silently replaced with a guessed IP.
+
+Android/iOS multipart POST requests now use React Native's `XMLHttpRequest` network
+path, which consumes its URI-backed FormData parts. Expo's incompatible global
+`fetch` is no longer used for native uploads. XHR creates the multipart boundary;
+the app never sets `Content-Type`. File validation, suitability screening, direct
+prediction, record save and analysis/save all use the same native upload transport.
+Browser uploads keep `fetch` and Blob behavior. Cancellation, timeouts, response
+headers, backend error details and save retry identity remain supported.
 
 `expo-file-system` 57.0.7 (already part of the installed Expo dependency tree) is now
 a direct dependency. Before each native upload, the app checks the actual file's
@@ -77,9 +89,11 @@ backend tests including real local CLIP/checkpoint integration.
 
 Post-change checks:
 
-- 116 frontend tests passed, zero skipped: native URI/MIME payloads, local file
-  availability, loopback rejection, upload/network/HTTP errors, abort timer, retry
-  identity, non-plant rejection, result rendering and saved history.
+- 123 frontend tests passed, zero skipped: use the installed React Native FormData
+  and Expo converter to reproduce the URI-part exception, verify the new native XHR
+  route preserves file URI, filename and MIME, and check upload failure/cancellation.
+  Gallery URIs, web fetch, loopback rejection, retries, saved history and error
+  rendering are also covered.
 - TypeScript check passed.
 - 99 focused backend tests passed, zero skipped, including real screening/checkpoint,
   corrupt/oversized file rejection, non-plant abstention, failed inference with no

@@ -4,28 +4,57 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
+import { NativeFormData, convertFormDataAsync, loadTs } from './nativeRuntime.mjs';
 
 function client(respond, platform = 'web', config = {}) {
   const requests = [];
   const source = readFileSync(new URL('../src/api.ts', import.meta.url), 'utf8');
   const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
   const exports = {};
+  const response = (url, options) => respond ? respond(url, options)
+    : { ok: true, json: async () => ({ id: 'saved-test-record', analysis_status: 'not_requested' }) };
+  const nativeRequests = [];
+  class NativeXHR {
+    controller = new AbortController();
+    aborted = false;
+    constructor() { nativeRequests.push(this); }
+    open(method, url) { this.method = method; this.url = url; }
+    send(body) {
+      if (config.sendThrows) throw new Error('Native send failed');
+      assert.equal(typeof body.getParts, 'function');
+      this.parts = body.getParts(); // The actual RN networking serialization boundary.
+      const options = { method: this.method, body, signal: this.controller.signal };
+      requests.push({ url: this.url, options, transport: 'xhr' });
+      Promise.resolve().then(() => response(this.url, options)).then(async result => {
+        this.status = result.status ?? (result.ok === false ? 500 : 200);
+        this.headers = result.headers;
+        try { this.responseText = JSON.stringify(await result.json()); }
+        catch { this.responseText = '<invalid json>'; }
+        this.onload?.();
+      }, error => { if (error.name === 'AbortError') this.onabort?.(); else this.onerror?.(); });
+    }
+    abort() { this.aborted = true; this.controller.abort(); this.onabort?.(); }
+    getResponseHeader(name) { return this.headers?.get(name) ?? null; }
+    setRequestHeader() { assert.fail('Native upload must let the runtime set multipart headers'); }
+  }
+  const native = loadTs('../src/nativeMultipartUpload.ts', { XMLHttpRequest: NativeXHR });
   runInNewContext(compiled, {
     exports, __DEV__: Boolean(config.logs), console: { info: (...args) => config.logs?.push(args) }, require: (name) => {
       if (name === 'expo-file-system') return { File: config.File || class { exists = true; size = 1234; type = ''; } };
+      if (name === './nativeMultipartUpload') return native;
       assert.equal(name, 'react-native'); return { Platform: { OS: platform } };
     },
     process: { env: { EXPO_PUBLIC_API_URL: config.url ?? 'http://test-only' } },
-    FormData: platform === 'web' ? FormData : class extends Map { append(key,value) { this.set(key,value); } },
+    FormData: platform === 'web' ? FormData : NativeFormData,
     Blob, URL, AbortController, setTimeout: config.setTimeout || setTimeout, clearTimeout, Error, TypeError,
     fetch: async (url, options) => {
-      requests.push({ url, options });
+      requests.push({ url, options, transport: 'fetch' });
+      if (platform !== 'web' && options?.body instanceof NativeFormData) await convertFormDataAsync(options.body);
       if (url === 'fixture-image') return { blob: async () => new Blob(['temporary test bytes'], { type: 'image/png' }) };
-      if (respond) return respond(url, options);
-      return { ok: true, json: async () => ({ id: 'saved-test-record', analysis_status: 'not_requested' }) };
+      return response(url, options);
     },
   });
-  return { api: exports.api, requests };
+  return { api: exports.api, requests, nativeRequests };
 }
 
 test('record save/retry calls only records and retains request identity, omitting absent values', async () => {
@@ -114,18 +143,27 @@ test('suitability preview uses its own endpoint without predicting or saving', a
 });
 
 test('native camera URI uses existing multipart file upload for validation, suitability and analysis',async()=>{
-  const {api,requests}=client(undefined,'android');
+  const {api,requests,nativeRequests}=client(undefined,'android');
   const image={uri:'file:///cache/fresh-camera.jpg',fileName:'fresh-camera.jpg',mimeType:'image/jpeg'};
   await api.validateImage(image);await api.checkSuitability(image);
   await api.scan('plant-a',image,{}, {request_id:'camera-analysis-001'});
   assert.deepEqual(requests.map(r=>r.url),['http://test-only/validate-image','http://test-only/check-plant-suitability',
     'http://test-only/plants/plant-a/observations']);
   for(const {options} of requests) {
+    assert.equal(requests[requests.findIndex(r=>r.options===options)].transport,'xhr');
     assert.equal(options.body.get('image').uri,image.uri);
     assert.equal(options.body.get('image').name,image.fileName);
     assert.equal(options.body.get('image').type,'image/jpeg');
     assert.equal(options.headers,undefined); // The runtime supplies the multipart boundary.
   }
+  assert.equal(nativeRequests.length,3);
+  const nativeFile = nativeRequests[0].parts[0];
+  assert.equal(nativeFile.uri,image.uri); assert.equal(nativeFile.name,image.fileName);
+  assert.equal(nativeFile.type,image.mimeType);
+  assert.match(nativeFile.headers['content-disposition'],/filename="fresh-camera.jpg"/);
+  assert.equal(nativeFile.headers['content-type'],'image/jpeg');
+  // This is the installed Expo SDK 57 failure reproduced on the exact RN part.
+  await assert.rejects(convertFormDataAsync(requests[0].options.body),/Unsupported FormDataPart implementation/);
   assert.equal(requests[2].options.body.get('request_id'),'camera-analysis-001');
 });
 
@@ -140,6 +178,7 @@ test('browser camera blob bytes survive the existing validation and analysis upl
       assert.equal(file.type,'image/jpeg');assert.equal(file.name,'camera-photo.jpg');
       for(const key of ['disease','confidence','severity'])assert.equal(options.body.has(key),false);
     }
+    assert.ok(requests.filter(r=>r.options?.method==='POST').every(r=>r.transport==='fetch'));
   } finally {URL.revokeObjectURL(uri);}
 });
 
@@ -178,11 +217,13 @@ test('native file availability is rechecked after a preview and before save', as
 });
 
 for (const uri of ['file:///cache/camera.png', 'content://media/images/12']) test(`native filename and MIME fallback preserve ${uri}`, async () => {
-  const { api, requests } = client(undefined, 'android', { File: class { exists = true; size = 123; type = 'image/png'; } });
+  const { api, requests, nativeRequests } = client(undefined, 'android', { File: class { exists = true; size = 123; type = 'image/png'; } });
   await api.predict({ uri });
   const file = requests[0].options.body.get('image');
   assert.equal(file.uri, uri); assert.equal(file.type, 'image/png'); assert.equal(file.name, 'leaf.png');
   assert.equal(requests[0].options.headers, undefined);
+  assert.equal(requests[0].transport,'xhr');
+  assert.equal(nativeRequests[0].parts[0].uri,uri);
 });
 
 test('native upload failure differs from a backend health connection failure', async () => {
