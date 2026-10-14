@@ -1,7 +1,22 @@
 // UI contract fixtures only; no real predictions, measurements or network calls.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { homeHealthSummary, recordLabels, progressionLabel, observationTime, retryId } from '../src/recordState.ts';
+import { homeHealthSummary, recordLabels, progressionLabel, observationTime, retryId, scanBlockers, isTomato } from '../src/recordState.ts';
+
+test('tomato analysis prerequisites require an explicitly tomato crop and every real check', () => {
+  const ready = { busy:false,selected:{id:'p',crop_name:'tomato'},image:{uri:'photo'},validation:{is_valid:true},
+    suitability:{status:'accepted'},health:{capabilities:{tomato_analysis:true,record_only:true}},pendingAnalysis:null,
+    temperature:'',humidity:'',soilType:'',condition:'Normal' };
+  assert.deepEqual(scanBlockers(ready,true),[]);
+  for (const selected of [null,{id:'leaf',name:'Leaf',crop_name:'Leaf'},{id:'missing',name:'tomato',crop_name:null}]) {
+    assert.ok(scanBlockers({...ready,selected},true).some(reason=>/crop set to tomato/.test(reason)));
+  }
+  assert.equal(isTomato({name:'tomato',crop_name:null}),false);
+  for (const patch of [{image:null},{validation:null},{validation:{is_valid:false}},{suitability:{status:'unavailable'}},{health:{capabilities:{tomato_analysis:false,record_only:true}}}]) {
+    assert.ok(scanBlockers({...ready,...patch},true).length>0);
+  }
+  assert.deepEqual(scanBlockers({...ready,selected:{id:'leaf',crop_name:'potato'}},false),[]);
+});
 
 test('home requires multiple observations before discussing comparison', () => {
   for (const records of [undefined, [], [{ severity: null }], [{ severity: 0 }]]) {

@@ -20,6 +20,7 @@ export function useJournal() {
   const [result,setResult]=useState<Observation|null>(null);
   const [name,setName]=useState('');
   const [cropName,setCropName]=useState('');
+  const [cropChoice,setCropChoice]=useState<'tomato'|'other'|'unknown'>('unknown');
   const [pendingPlant,setPendingPlant]=useState<{ id:string; name:string; crop:string|null }|null>(null);
   const [image,setImage]=useState<ImagePicker.ImagePickerAsset|null>(null);
   const [photoMessage,setPhotoMessage]=useState('');
@@ -235,7 +236,13 @@ export function useJournal() {
     if(plant.id===selected?.id) return true;
     if(locked||operation.current) return false;
     if(draftAvailable&&!image) { setError('Open Scan to restore or discard the local recovery copy first.'); return false; }
-    setSelected(plant); setObservations([]); setProgress(null); setProgressRef(''); setResult(null); clearDraft();
+    setSelected(plant); setObservations([]); setProgress(null); setProgressRef(''); setResult(null);
+    // A selected image and its server checks do not belong to a plant. Keep them
+    // while clearing record-specific recovery data so a crop change does not
+    // force a camera retake or discard a draft photo.
+    forgetStoredDraft(); setDraftMessage('Photo kept. It will be saved under the newly selected plant.');
+    setTemperature(''); setHumidity(''); setSoilType(''); setCondition('');
+    setTrackingRef(''); setNotes(''); setPendingId(null); setPendingAnalysis(null);
     return true;
   }
   function startScan(plant=selected) {
@@ -246,26 +253,43 @@ export function useJournal() {
     if(busy||pendingId!==null) return;
     if(draftAvailable&&!image) { setError('Open Scan to restore or discard the local recovery copy first.'); return; }
     await run(async () => {
-      const request=pendingPlant||{ id:retryId(null),name:name.trim(),crop:cropName.trim()||null };
+      const crop=cropChoice==='tomato'? 'tomato':cropChoice==='other'? cropName.trim()||null:null;
+      const request=pendingPlant||{ id:retryId(null),name:name.trim(),crop };
       if(!request.name) throw new Error('Enter a name for this plant.');
       setPendingPlant(request);
       const plant=await api.addPlant(request.name,request.crop,request.id);
       setPlants(previous => [plant,...previous.filter(item => item.id!==plant.id)]); setSelected(plant);
       setRecords(previous => ({ ...previous,[plant.id]: previous[plant.id]||[] }));
-      setObservations([]); setProgress(null); setProgressRef(''); setResult(null); clearDraft(); setName(''); setCropName(''); setPendingPlant(null);
+      setObservations([]); setProgress(null); setProgressRef(''); setResult(null); setName(''); setCropName(''); setCropChoice('unknown'); setPendingPlant(null);
     });
+  }
+  async function updatePlantCrop(plantId:string,crop:string|null):Promise<boolean> {
+    if(busy||pendingId!==null||pendingPlant) return false;
+    let succeeded=false;
+    await run(async()=>{
+      const updated=await api.updatePlantCrop(plantId,crop);
+      setPlants(previous=>previous.map(item=>item.id===plantId?updated:item));
+      setSelected(previous=>previous?.id===plantId?updated:previous);
+      succeeded=true;
+    });
+    return succeeded;
+  }
+  function chooseCrop(choice:'tomato'|'other'|'unknown') {
+    setCropChoice(choice);
+    if(choice==='tomato') setCropName('');
+    if(choice==='unknown') setCropName('');
   }
   return {
     analysisBlockers: [...(pendingPlant? ['Finish the pending plant save in My Plants first.']:[]),...scanBlockers({ busy,selected,image,validation,suitability,health,pendingAnalysis,temperature,humidity,soilType,condition },true)],
     recordBlockers: [...(pendingPlant? ['Finish the pending plant save in My Plants first.']:[]),...scanBlockers({ busy,selected,image,validation,suitability,health,pendingAnalysis,temperature,humidity,soilType,condition },false)],
     health,screen,plants,selected,records,observations,progress,progressRef,result,
-    name,setName,cropName,setCropName,image,imageRevision,photoMessage,cancelPhoto,validation,suitability,temperature,setTemperature,
+    name,setName,cropName,setCropName,cropChoice,chooseCrop,image,imageRevision,photoMessage,cancelPhoto,validation,suitability,temperature,setTemperature,
     pendingPlant,discardPendingPlant: () => { if(!busy) setPendingPlant(null); },
     humidity,setHumidity,soilType,setSoilType,condition,setCondition,observedAt,observedTimezone,
     trackingRef,setTrackingRef,notes,setNotes,pendingId,pendingAnalysis,busy,error,locked,navigate,
     openHistory,pick,validateImage,saveRecord,clearDraft,selectPlant,startScan,addPlant,
     draftAvailable,draftMessage,draftRecoverySupported:draftStorageAvailable(),keepDraft,restoreDraft,forgetStoredDraft,
-    refresh: () => run(loadPlants),setProgressRef: (value: string) => { setProgressRef(value); setProgress(null); }
+    updatePlantCrop,refresh: () => run(loadPlants),setProgressRef: (value: string) => { setProgressRef(value); setProgress(null); }
   };
 }
 export type Journal=ReturnType<typeof useJournal>;

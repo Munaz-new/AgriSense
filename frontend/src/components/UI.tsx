@@ -3,8 +3,8 @@ import { Pressable,Text,TextInput,View } from 'react-native';
 import { s,colors } from '../theme';
 import { Icon,IconName } from './Icon';
 export const date=(value: string) => new Date(value).toLocaleString();
-export function Button({ title,onPress,disabled=false,secondary=false,icon }: { title: string; onPress: () => void; disabled?: boolean; secondary?: boolean; icon?: IconName; }) {
-  return <Pressable accessibilityRole="button" accessibilityState={{ disabled }} disabled={disabled} onPress={onPress} style={({ pressed }) => [s.button,secondary&&s.secondary,disabled&&s.disabled,pressed&&{ opacity: .75 }]}>
+export function Button({ title,onPress,disabled=false,secondary=false,icon,selected,accessibilityLabel }: { title: string; onPress: () => void; disabled?: boolean; secondary?: boolean; icon?: IconName; selected?: boolean; accessibilityLabel?: string; }) {
+  return <Pressable accessibilityRole="button" accessibilityLabel={accessibilityLabel} accessibilityState={{ disabled,...(selected===undefined?{}:{selected}) }} disabled={disabled} onPress={onPress} style={({ pressed }) => [s.button,secondary&&s.secondary,disabled&&s.disabled,selected&&{ borderWidth: 1,borderColor: colors.green },pressed&&{ opacity: .75 }]}>
     {icon&&<Icon name={icon} size={20} color={secondary? colors.green:'#FFF'} />}<Text style={[s.buttonText,secondary&&s.secondaryText,{ flexShrink: 1 }]}>{title}</Text>
   </Pressable>;
 }

@@ -24,13 +24,15 @@ function load(path) {
     if (name.endsWith('/recordState')) return recordState;
     if (name.endsWith('/treatmentGuidance')) return guidance;
     if (name.endsWith('/Icon')) return { Icon: () => null };
-    if (name.endsWith('/UI')) return { Badge: primitive, Empty: primitive, Title: primitive, Field: primitive, date: value => value,
+    if (name.endsWith('/UI')) return { Badge: primitive, Empty: primitive, Title: primitive,
+      Field: ({label}) => React.createElement('label', null, label), date: value => value,
       Button: ({ title, disabled }) => React.createElement('button', { disabled }, title) };
     return load(resolve(dirname(path), name + '.tsx'));
   } });
   return exports;
 }
 const { ObservationCard } = load(resolve(root, 'components/ObservationCard.tsx'));
+const { PlantsScreen } = load(resolve(root, 'screens/PlantsScreen.tsx'));
 const real = { id: 'render-test', plant_id: 'p', image_path: '/test.png', created_at: '2026-01-01', observed_at: '2026-01-01', observed_timezone: 'Asia/Kolkata (UTC+05:30)', disease: 'Early_blight', confidence: 72.5, severity: null, is_mock: false, analysis_status: 'completed', temperature: null, humidity: null, soil_type: null, soil_condition: null };
 
 test('saved result/history card renders prediction, uncertainty, sourced guidance and missing environment', () => {
@@ -93,4 +95,29 @@ test('Scan exposes Take Photo separately from gallery and disables replacement f
   assert.ok(initial.includes('Take Photo'));assert.ok(initial.includes('Choose from Gallery'));
   const locked=renderToStaticMarkup(React.createElement(ScanScreen,{j:{...j,image:{uri:'pending.jpg'},locked:true,pendingId:'pending'}}));
   for(const label of ['Retake Photo','Choose from Gallery','Cancel photo']) assert.ok(locked.includes(`<button disabled="">${label}</button>`),label);
+});
+
+test('plant UI keeps plant names and crop metadata distinct and offers explicit crop selection/editing',()=>{
+  const j={plants:[{id:'unknown',name:'Unknown',crop_name:'Leaf',created_at:'2026-01-01'},
+    {id:'named-tomato',name:'tomato',crop_name:null,created_at:'2026-01-01'}],selected:null,records:{},
+    cropChoice:'tomato',cropName:'',name:'',setName(){},setCropName(){},chooseCrop(){},locked:false,busy:false,
+    pendingId:null,pendingPlant:null,setCropChoice(){},selectPlant(){},startScan(){},openHistory(){},refresh(){},addPlant(){},discardPendingPlant(){}};
+  const html=renderToStaticMarkup(React.createElement(PlantsScreen,{j}));
+  for(const text of ['Plant name / identifier','Crop (choose what this plant is)','Tomato','Other crop','Not recorded',
+    'Unknown','Crop: Leaf','tomato','Crop: Not recorded','Edit crop for Unknown','Edit crop for tomato']) assert.ok(html.includes(text),text);
+  assert.ok(!html.includes('Unknown · Leaf'));
+  assert.ok(!html.includes('tomato · Crop not recorded'));
+});
+
+test('Scan explains missing tomato selection and routes to creating/editing without clearing the photo',()=>{
+  const {ScanScreen}=load(resolve(root,'screens/ScanScreen.tsx'));
+  const j={plants:[{id:'p',name:'Leaf 1',crop_name:'Leaf'}],selected:{id:'p',name:'Leaf 1',crop_name:'Leaf'},
+    health:{capabilities:{tomato_analysis:true}},image:{uri:'kept-photo.jpg'},validation:{is_valid:true},suitability:{status:'accepted'},
+    analysisBlockers:['Select or create a plant with crop set to tomato.'],recordBlockers:[],analysisBlockers:[],observedAt:'2026-01-01',
+    navigate(){},chooseCrop(){},locked:false};
+  const html=renderToStaticMarkup(React.createElement(ScanScreen,{j:{...j,analysisBlockers:['Select or create a plant with crop set to tomato.']}}));
+  assert.ok(html.includes('Select a plant with crop set to tomato'));
+  assert.ok(html.includes('Create a tomato plant'));
+  assert.ok(html.includes('Edit selected plant crop'));
+  assert.ok(html.includes('src="kept-photo.jpg"'));
 });

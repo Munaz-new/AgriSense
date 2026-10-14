@@ -138,6 +138,9 @@ export const api = {
   addPlant: (name: string, cropName: string | null = null, requestId?: string) => request<Plant>('/plants', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, crop_name: cropName, request_id: requestId }),
   }),
+  updatePlantCrop: (id: string, cropName: string | null) => request<Plant>(`/plants/${id}`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ crop_name: cropName }),
+  }),
   observations: (id: string) => request<Observation[]>(`/plants/${id}/observations`),
   progression: (id: string, trackingRef = '') => request<Progression>(`/plants/${id}/progression${trackingRef.trim() ? `?tracking_ref=${encodeURIComponent(trackingRef.trim())}` : ''}`),
   async record(id: string, image: ImagePickerAsset, environment: Environment, details: RecordDetails) {

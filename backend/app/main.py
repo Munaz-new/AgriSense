@@ -44,6 +44,11 @@ class PlantCreate(PlantInput):
     request_id: str | None = Field(default=None, min_length=8, max_length=100, pattern=r'^[A-Za-z0-9_-]+$')
 
 
+class PlantCropUpdate(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+    crop_name: str | None = Field(default=None, min_length=1, max_length=100)
+
+
 class Observation(BaseModel):
     id: str
     plant_id: str
@@ -231,6 +236,14 @@ def create_app(database_path: Path | None = None, upload_dir: Path | None = None
     @app.get("/plants/{plant_id}", response_model=Plant)
     def get_plant(plant_id: str):
         return require_plant(plant_id)
+
+    @app.patch("/plants/{plant_id}", response_model=Plant)
+    def update_plant_crop(plant_id: str, body: PlantCropUpdate):
+        # Crop labels are explicit user-supplied metadata; never infer them from a name.
+        require_plant(plant_id)
+        with connect(database_path) as db:
+            db.execute("UPDATE plants SET crop_name = ? WHERE id = ?", (body.crop_name, plant_id))
+            return dict(db.execute("SELECT * FROM plants WHERE id = ?", (plant_id,)).fetchone())
 
     @app.get("/plants/{plant_id}/observations", response_model=list[Observation])
     def observations(plant_id: str):

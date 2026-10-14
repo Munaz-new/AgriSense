@@ -82,6 +82,19 @@ def test_plant_creation_retry_and_conflict(client):
     assert len(client.get('/plants').json()) == 2
 
 
+def test_plant_crop_can_be_corrected_explicitly_without_changing_name_or_history(client):
+    created = client.post('/plants', json={'name': 'Unknown', 'crop_name': None}).json()
+    plant_id = created['id']
+    edited = client.patch(f'/plants/{plant_id}', json={'crop_name': 'tomato'})
+    assert edited.status_code == 200
+    assert edited.json()['name'] == 'Unknown'
+    assert edited.json()['crop_name'] == 'tomato'
+    assert client.get('/plants').json()[0]['crop_name'] == 'tomato'
+    assert client.patch(f'/plants/{plant_id}', json={'crop_name': None}).json()['crop_name'] is None
+    assert client.patch('/plants/missing', json={'crop_name': 'tomato'}).status_code == 404
+    assert client.patch(f'/plants/{plant_id}', json={'crop_name': '   '}).status_code == 422
+
+
 @pytest.mark.parametrize('request_id', ['', 'short', 'x' * 101, 'bad/id-001'])
 def test_invalid_plant_request_identity(client, request_id):
     assert client.post('/plants', json={'name': 'Plant', 'request_id': request_id}).status_code == 422

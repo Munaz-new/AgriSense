@@ -23,14 +23,15 @@ export function ScanScreen({ j }: { j: Journal; }) {
     {!isTomato(j.selected)&&<View style={s.card}>
       <Text style={s.notice}>Tomato analysis needs a plant explicitly identified with crop “tomato”. A plant name alone does not set its crop.</Text>
       {j.plants.filter(isTomato).map(plant => <Button key={plant.id} title={`Select tomato plant: ${plant.name}`} disabled={j.locked} onPress={() => j.selectPlant(plant)} />)}
-      <Button title="Create a tomato plant" secondary disabled={j.locked} onPress={() => { j.setCropName('tomato'); j.navigate('plants'); }} />
+      <Button title="Create a tomato plant" secondary disabled={j.locked} onPress={() => { j.chooseCrop('tomato'); j.navigate('plants'); }} />
+      {!!j.selected&&<Button title="Edit selected plant crop" secondary disabled={j.locked} onPress={() => j.navigate('plants')} />}
     </View>}
     {!j.plants.length? <>
       <Empty title="Add a plant first">Each photo belongs to one physical plant.</Empty>
       <Button title="Add Plant" icon="plus" onPress={() => j.navigate('plants')} />
     </>:<>
       <PlantPicker j={j} />
-      <Text style={s.notice}>Selected crop: {j.selected?.crop_name||'Not recorded'}</Text>
+      <Text style={s.notice}>Selected plant: {j.selected?.name||'None'} · Crop: {j.selected?.crop_name||'Not recorded'}</Text>
       <View style={s.card}>
         <Text style={s.eyebrow}>01 / Plant photo</Text>{j.image? <Image key={`${j.imageRevision}:${j.image.uri}`} accessibilityLabel="Selected plant photo" source={{ uri: j.image.uri }} style={s.photo} />:<View style={s.placeholder}>
           <Icon name="scan" size={40} />

@@ -208,9 +208,10 @@ test('photo capture, crop selection, validation, automatic details and saved his
   assert.equal(render().condition, '');
   await render().validateImage();
   assert.equal(render().validation.is_valid, false);
+  const photo=render().image;
   render().selectPlant(tomato);
-  assert.equal(render().image, null);
-  assert.equal(render().validation, null);
+  assert.equal(render().image, photo);
+  assert.equal(render().validation.is_valid, false);
   await render().pick(false);
   const timestamp = render().observedAt;
   valid = true;
@@ -242,7 +243,7 @@ test('explicit tomato creation selects persisted crop and image analysis needs n
     },
   });
   await render().refresh();
-  render().setName('Tomato'); render().setCropName('tomato');
+  render().setName('Tomato'); render().chooseCrop('tomato');
   await render().addPlant();
   assert.equal(render().selected.crop_name, 'tomato');
   await render().pick(false); await render().validateImage();
@@ -341,11 +342,37 @@ test('plant creation timeout retries the same identity and does not duplicate a 
       if(!saved){saved={id:'plant-saved',name,crop_name:crop};throw new Error('timeout');}
       return saved;
     }});
-  await render().refresh();render().setName('Plant A');render().setCropName('tomato');
+  await render().refresh();render().setName('Plant A');render().chooseCrop('tomato');
   await render().addPlant();assert.equal(render().locked,true);assert.ok(render().pendingPlant);
   await render().refresh();assert.equal(render().plants.length,1);
   await render().addPlant();assert.deepEqual(calls[0],calls[1]);
   assert.equal(render().plants.length,1);assert.equal(render().pendingPlant,null);
+});
+
+test('creating an explicitly tomato plant retains the selected photo and completed checks', async () => {
+  const created={id:'tomato-new',name:'Greenhouse 4',crop_name:'tomato'};
+  const existing={id:'plant-leaf',name:'Leaf 1',crop_name:'Leaf'};
+  const render=journalHarness({health:async()=>({capabilities:{record_only:true}}),plants:async()=>[existing],observations:async()=>[],
+    validateImage:async()=>({is_valid:true,message:'valid'}),
+    addPlant:async(name,crop)=>{assert.equal(name,'Greenhouse 4');assert.equal(crop,'tomato');return created;}});
+  await render().refresh();await render().pick(false);await render().validateImage();
+  const photo=render().image;
+  render().setName('Greenhouse 4');render().chooseCrop('tomato');await render().addPlant();
+  assert.equal(render().selected,created);assert.equal(render().image,photo);
+  assert.equal(render().validation.is_valid,true);assert.equal(render().suitability.status,'accepted');
+});
+
+test('switching from a non-tomato plant to an existing tomato plant retains photo checks', async () => {
+  const leaf={id:'leaf-plant',name:'Leaf 1',crop_name:'Leaf'};
+  const tomato={id:'tomato-plant',name:'Greenhouse Tomato',crop_name:'tomato'};
+  const render=journalHarness({health:async()=>({capabilities:{record_only:true,tomato_analysis:true}}),
+    plants:async()=>[leaf,tomato],observations:async()=>[],validateImage:async()=>({is_valid:true,message:'valid'})});
+  await render().refresh();await render().pick(false);await render().validateImage();
+  const photo=render().image;
+  assert.equal(render().selected,leaf);
+  assert.equal(render().selectPlant(tomato),true);
+  assert.equal(render().selected,tomato);assert.equal(render().image,photo);
+  assert.equal(render().validation.is_valid,true);assert.equal(render().suitability.status,'accepted');
 });
 
 test('blocked selection cannot display another plant history under the selected name', async () => {
