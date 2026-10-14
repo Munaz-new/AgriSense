@@ -23,6 +23,7 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
+    "build:pages": "node scripts/build-pages.mjs",
     "typecheck": "tsc --noEmit",
     "test": "node --experimental-strip-types --experimental-test-isolation=none --test tests/*.test.mjs"
   },

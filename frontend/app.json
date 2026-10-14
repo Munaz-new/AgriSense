@@ -5,6 +5,7 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
+    "web": { "bundler": "metro", "output": "single" },
     "android": {
       "package": "com.munaz.agrisense",
       "versionCode": 1,

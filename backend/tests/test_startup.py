@@ -52,6 +52,8 @@ def test_production_requires_explicit_hosts_and_persistent_storage(monkeypatch, 
 
 def test_production_hides_docs_checks_host_and_separates_readiness(monkeypatch, tmp_path):
     from app.prediction import TrainedTomatoPredictor
+    from app.database import initialize
+    from hashlib import sha256
 
     monkeypatch.setenv('AGRISENSE_ENV', 'production')
     monkeypatch.setenv('AGRISENSE_ALLOWED_HOSTS', 'api.example.test,testserver')
@@ -61,16 +63,23 @@ def test_production_hides_docs_checks_host_and_separates_readiness(monkeypatch, 
     verifier_weights.touch()
     monkeypatch.setenv('AGRISENSE_CHECKPOINT_PATH', str(checkpoint))
     monkeypatch.setenv('AGRISENSE_PLANT_VERIFIER_WEIGHTS', str(verifier_weights))
+    for name in ('AGRISENSE_CHECKPOINT_SHA256', 'AGRISENSE_PLANT_VERIFIER_SHA256'):
+        monkeypatch.setenv(name, sha256(b'').hexdigest())
+    monkeypatch.setenv('AGRISENSE_ACCESS_ISSUER', 'https://demo.cloudflareaccess.com')
+    monkeypatch.setenv('AGRISENSE_ACCESS_AUD', 'test-audience')
+    monkeypatch.setenv('AGRISENSE_DEMO_EMAILS', 'demo@example.test')
+    initialize(tmp_path/'persistent'/'journal.db')
+    (tmp_path/'persistent'/'uploads').mkdir()
     model = object.__new__(TrainedTomatoPredictor)
     app = create_app(tmp_path/'persistent'/'journal.db', tmp_path/'persistent'/'uploads',
                      predictor=model, plant_verifier=object())
     (tmp_path/'persistent'/'uploads'/'private-photo.jpg').write_bytes(b'private')
     with TestClient(app) as client:
-        assert client.get('/docs').status_code == 404
-        assert client.get('/openapi.json').status_code == 404
+        assert client.get('/docs').status_code == 401
+        assert client.get('/openapi.json').status_code == 401
         assert client.get('/ready').json() == {'status': 'ready'}
-        assert client.get('/uploads/private-photo.jpg').status_code == 404
-        assert client.get('/health').status_code == 200
+        assert client.get('/uploads/private-photo.jpg').status_code == 401
+        assert client.get('/health').status_code == 401
         assert client.get('/health', headers={'host': 'attacker.invalid'}).status_code == 400
 
 

@@ -1,5 +1,10 @@
 # AgriSense Phase 9: security and deployment readiness
 
+> Historical Phase 9 report. The [Phase 13 deployment runbook](phase13-cloudflare-railway.md)
+> supersedes production configuration and the shared-demo authentication plan.
+> The examples below no longer satisfy production startup requirements. No cloud
+> deployment or multi-user ownership implementation is implied by Phase 13.
+
 Project title remains **AgriSense: Plant Disease Detection and Health Monitoring Using Hybrid CNN-Transformer Architecture**.
 
 ## Release decision

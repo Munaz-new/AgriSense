@@ -9,8 +9,11 @@ LEGACY_COLUMNS = ('id', 'plant_id', 'image_path', 'created_at', 'disease', 'seve
 
 
 @contextmanager
-def connect(path: Path):
-    connection = sqlite3.connect(path, timeout=30)
+def connect(path: Path, *, create: bool = False):
+    # Only the explicit local initializer may create a database. Runtime reads
+    # and writes must fail if a volume disappears or a path is mistyped.
+    connection = sqlite3.connect(path.resolve().as_uri() + ('?mode=rwc' if create else '?mode=rw'),
+                                 uri=True, timeout=30)
     connection.row_factory = sqlite3.Row
     connection.execute('PRAGMA foreign_keys = ON')
     try:
@@ -23,7 +26,7 @@ def connect(path: Path):
 def initialize(path: Path):
     """Transactional migration of pre-Phase-5 databases; never infer old metadata."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    with connect(path) as db:
+    with connect(path, create=True) as db:
         # Table rebuild preserves rows and self-references; verify before committing.
         db.execute('PRAGMA foreign_keys = OFF')
         db.execute('BEGIN IMMEDIATE')

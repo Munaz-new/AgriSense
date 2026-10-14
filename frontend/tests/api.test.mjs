@@ -57,6 +57,17 @@ function client(respond, platform = 'web', config = {}) {
   return { api: exports.api, requests, nativeRequests };
 }
 
+test('demo access failures ask for sign-in without suggesting browser secrets', async () => {
+  for (const status of [401, 403]) {
+    const { api } = client(() => ({ ok: false, status }), 'web', { url: 'https://demo.pages.dev/api' });
+    await assert.rejects(api.plants(), error => error.code === 'demo_access_denied' && /sign.in/i.test(error.message));
+  }
+  const redirected = client(() => ({ ok: true, redirected: true }), 'web', { url: 'https://demo.pages.dev/api' });
+  await assert.rejects(redirected.api.plants(), error => error.code === 'demo_access_denied');
+  const offline = client(() => { throw new TypeError('Failed to fetch'); }, 'web', { url: 'https://demo.pages.dev/api' });
+  await assert.rejects(offline.api.plants(), error => /sign.in/i.test(error.message) && !/laptop/i.test(error.message));
+});
+
 test('record save/retry calls only records and retains request identity, omitting absent values', async () => {
   const { api, requests } = client();
   const image = { uri: 'fixture-image', fileName: 'fixture.png' };

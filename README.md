@@ -1,8 +1,15 @@
 # AgriSense: Plant Disease Detection and Health Monitoring Using Hybrid CNN-Transformer Architecture
 
-**October 14 readiness: not safe for public deployment.** The owner reports that
+**Phase 13: deployment preparation only; no cloud deployment performed.** See the
+[Cloudflare Pages + Railway runbook](docs/phase13-cloudflare-railway.md) for the
+invited shared-demo access boundary, exact configuration, checkpoint delivery,
+data preservation, tests, and remaining approval/build/device gates. Production
+now requires verified Cloudflare Access identities; separate user ownership is
+still absent. All invited demonstrators share the same journal.
+
+**Earlier October 14 readiness:** The owner reports that
 the real Android camera-to-history workflow passes; Phase 9 has not repeated device
-testing. The API still lacks authentication and per-user record ownership. See the
+testing. At that point the API lacked authentication and per-user record ownership. See the
 [final submission runbook and October 13 verification](docs/final-submission-2026-10-12.md).
 The [Phase 7B–7E report](docs/phase7-local-readiness.md) preserves earlier evidence.
 The [phone-camera integration guide](docs/phone-camera-integration.md) covers the

@@ -66,7 +66,13 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
       : await fetch(`${API_URL}${path}`, { ...options, signal: controller.signal });
     const reference = response.headers?.get('x-agrisense-request-id') || undefined;
     diagnostic('response', response.status, reference);
+    if (Platform.OS === 'web' && 'redirected' in response && response.redirected) {
+      throw new ApiError('demo_access_denied', 'Sign-in may have expired. Reload the page to sign in again. Check history before retrying a save.');
+    }
     if (!response.ok) {
+      if (response.status === 401 || response.status === 403) {
+        throw new ApiError('demo_access_denied', 'Demo access denied or sign-in expired. Reload the page to sign in with an invited account. Check history before retrying a save.');
+      }
       const body = await response.json().catch(() => ({}));
       if (body.detail?.is_valid === false) throw new ImageValidationError(body.detail);
       if (['non_plant_image', 'plant_content_uncertain', 'plant_screening_unavailable'].includes(body.detail?.code)) {
@@ -89,6 +95,9 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     const saving = options?.method === 'POST' && (path === '/plants' || /\/plants\/[^/]+\/(records|observations)$/.test(path));
     const recovery = saving ? ' Refresh history before retrying; the save may have completed. Retry the same submission.' : ' Refresh connection status and retry.';
     if (error instanceof Error && error.name === 'AbortError') throw new ApiError('request_timeout', `Request timed out after 30 seconds (${path}).${recovery}`);
+    if (error instanceof TypeError && Platform.OS === 'web' && API_URL.startsWith('https://')) {
+      throw new ApiError('backend_unreachable', `Cannot reach the demo API, or sign-in has expired. Reload the page to sign in again. If it still fails, contact the demo operator.${recovery}`);
+    }
     if (error instanceof TypeError) throw new ApiError(options?.body instanceof FormData ? 'upload_failed' : 'backend_unreachable',
       `${options?.body instanceof FormData ? 'Photo upload failed; backend receipt is unknown. ' : ''}Cannot reach ${API_URL} (${path}). Open ${API_URL}/health on the phone. Check for a changed laptop IP, same Wi-Fi, backend --host 0.0.0.0, firewall and EXPO_PUBLIC_API_URL; restart Expo with --clear after changing it.${recovery}`);
     throw error;

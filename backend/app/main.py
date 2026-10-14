@@ -25,6 +25,8 @@ from .plant_suitability import PlantContentVerifier, Suitability
 from .startup import startup_stage
 from .request_limits import LocalRequestBoundary
 from .diagnostics import RequestDiagnostics, event, stage
+from .demo_access import AccessVerifier, DemoAccessBoundary
+from .deployment import verify_production_files
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -101,12 +103,14 @@ def create_app(database_path: Path | None = None, upload_dir: Path | None = None
                checkpoint_path: Path | None = None,
                plant_verifier: PlantContentVerifier | None = None) -> FastAPI:
     production = os.getenv('AGRISENSE_ENV', 'development').strip().lower() == 'production'
+    if os.getenv('RAILWAY_ENVIRONMENT_ID') and not production:
+        raise RuntimeError('Railway must run with AGRISENSE_ENV=production.')
     database_path = database_path or Path(os.getenv("AGRISENSE_DB_PATH", ROOT / "database/agrisense.db"))
     upload_dir = upload_dir or Path(os.getenv("AGRISENSE_UPLOAD_DIR", ROOT / "backend/uploads"))
     configured_hosts = []
     if production:
         configured_hosts = [host.strip() for host in os.getenv('AGRISENSE_ALLOWED_HOSTS', '').split(',') if host.strip()]
-        if not configured_hosts or '*' in configured_hosts:
+        if not configured_hosts or any('*' in host for host in configured_hosts):
             raise RuntimeError('Production requires explicit AGRISENSE_ALLOWED_HOSTS; wildcard hosts are forbidden.')
         for name, path in (('AGRISENSE_DB_PATH', database_path), ('AGRISENSE_UPLOAD_DIR', upload_dir)):
             resolved_path = path.resolve()
@@ -116,7 +120,7 @@ def create_app(database_path: Path | None = None, upload_dir: Path | None = None
         if any(
             origin == '*' or
             (parsed := urlsplit(origin)).scheme != 'https' or not parsed.hostname or
-            parsed.path not in ('', '/') or parsed.query or parsed.fragment or parsed.username or parsed.password
+            parsed.path != '' or '*' in origin or parsed.query or parsed.fragment or parsed.username or parsed.password
             for origin in configured_origins
         ):
             raise RuntimeError('Production browser CORS origins must be exact HTTPS origins; native apps need no CORS entry.')
@@ -124,6 +128,8 @@ def create_app(database_path: Path | None = None, upload_dir: Path | None = None
             artifact = Path(os.getenv(name, ''))
             if not artifact.is_absolute() or not artifact.is_file():
                 raise RuntimeError(f'Production requires an existing absolute {name}; model downloads are disabled.')
+        access_verifier = AccessVerifier()
+        verify_production_files(database_path, upload_dir)
     configured_checkpoint = checkpoint_path or Path(os.getenv(
         "AGRISENSE_CHECKPOINT_PATH", ROOT / "model/checkpoints/tomato_gpu_epoch5_retry2/best.pt"))
     if not configured_checkpoint.is_absolute():
@@ -136,19 +142,26 @@ def create_app(database_path: Path | None = None, upload_dir: Path | None = None
     async def lifespan(app: FastAPI):
         nonlocal predictor, plant_verifier
         with startup_stage('database'):
-            initialize(database_path)
+            if not production:
+                initialize(database_path)
         if predictor is None:
             try:
                 with startup_stage('tomato_checkpoint'):
                     predictor = await run_in_threadpool(TrainedTomatoPredictor, configured_checkpoint)
             except Exception:
+                if production:
+                    raise RuntimeError('Production tomato model initialization failed.') from None
                 logging.getLogger('uvicorn.error').warning('Tomato analysis unavailable; record-only saving remains enabled.')
         if plant_verifier is None and isinstance(predictor, TrainedTomatoPredictor):
             try:
                 with startup_stage('plant_suitability'):
                     plant_verifier = await run_in_threadpool(PlantContentVerifier)
             except Exception:
+                if production:
+                    raise RuntimeError('Production plant screening initialization failed.') from None
                 logging.getLogger('uvicorn.error').warning('Plant screening unavailable; tomato analysis remains disabled.')
+        if production and (not isinstance(predictor, TrainedTomatoPredictor) or plant_verifier is None):
+            raise RuntimeError('Production requires both trained model components.')
         app.state.predictor = predictor
         app.state.plant_verifier = plant_verifier
         logging.getLogger('uvicorn.error').info('AgriSense startup state=ready record_only=true tomato_analysis=%s',
@@ -161,19 +174,20 @@ def create_app(database_path: Path | None = None, upload_dir: Path | None = None
                   openapi_url=None if production else '/openapi.json')
     origins = [origin.strip() for origin in os.getenv(
         'AGRISENSE_CORS_ORIGINS', '' if production else 'http://localhost:8081,http://127.0.0.1:8081').split(',') if origin.strip()]
+    if production:
+        app.add_middleware(DemoAccessBoundary, verifier=access_verifier)
     app.add_middleware(LocalRequestBoundary, allowed_origins=origins)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=origins,
-        allow_methods=["GET", "POST"], allow_headers=["Content-Type"],
+        allow_methods=["GET", "POST", "PATCH"], allow_headers=["Content-Type"],
     )
     app.add_middleware(RequestDiagnostics)
     if production:
         app.add_middleware(TrustedHostMiddleware, allowed_hosts=configured_hosts)
-    # Stored image files are private journal content. Until authenticated,
-    # owner-scoped photo delivery exists, production mode must not expose them.
-    if not production:
-        app.mount("/uploads", StaticFiles(directory=upload_dir), name="uploads")
+    # In production the whole mount is behind signed identity verification.
+    # Every invited demonstrator shares this journal; there are no separate tenants.
+    app.mount("/uploads", StaticFiles(directory=upload_dir), name="uploads")
 
     def require_plant(plant_id: str):
         with connect(database_path) as db:
@@ -202,7 +216,7 @@ def create_app(database_path: Path | None = None, upload_dir: Path | None = None
         model_ready = isinstance(predictor, TrainedTomatoPredictor) and plant_verifier is not None
         try:
             with connect(database_path) as db:
-                db.execute('SELECT 1')
+                db.execute('SELECT id FROM plants LIMIT 1')
             database_ready = True
         except Exception:
             database_ready = False
